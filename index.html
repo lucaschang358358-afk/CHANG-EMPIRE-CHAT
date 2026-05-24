@@ -4951,30 +4951,40 @@ body.dark-mode .poll-bubble{
         <div class="monitor-card-new"><div class="monitor-label-new">註冊 / 今日訊息</div><div class="monitor-value-new"><span id="mon-total-val">0</span> / <span id="mon-daily-val" style="font-size:0.9rem;opacity:0.6;">0</span></div></div>
         <div class="monitor-card-new"><div class="monitor-label-new">最久在線</div><div class="monitor-value-new" id="mon-longest-val" style="font-size:1rem;">--</div></div>
       </div>
-      <div class="monitor-table-container-new">
-       
-<table>
- 
-  <tbody id="mon-user-table-body"></tbody>
-</table>
+      
 
-<div class="admin-section">
+<div class="monitor-table-container-new">
 
-  <div class="admin-section-title">
-    🚨 可疑用戶偵測
-  </div>
+  <table class="monitor-table-new">
+    <thead>
+      <tr>
+        <th>用戶/頻道</th>
+        <th>位置/IP</th>
+        <th>裝置/瀏覽器</th>
+        <th>訊息統計</th>
+        <th>最後登入</th>
+      </tr>
+    </thead>
 
-  <div id="suspicious-users-list">
+    <tbody id="mon-user-table-body"></tbody>
 
-    <div style="padding:15px;opacity:0.7;">
-      正在掃描...
+  </table>
+
+  <div class="admin-section">
+
+    <div class="admin-section-title">
+      🚨 可疑用戶偵測
+    </div>
+
+    <div id="suspicious-users-list">
+      <div style="padding:15px;opacity:0.7;">
+        正在掃描...
+      </div>
     </div>
 
   </div>
 
 </div>
-      </div>
-    </div>
 
 
     <div class="admin-section" id="admin-gatekeeper-section" style="border: 1px solid rgba(220,38,38,0.3); background: rgba(220,38,38,0.03); border-radius: 18px; padding: 20px; margin-bottom: 25px;">
@@ -5238,19 +5248,11 @@ async function doLogout(){
 // AUTH STATE
 // ============================================================
 auth.onAuthStateChanged(async user=>{
-auth.onAuthStateChanged(async user=>{
 
   // 禁止匿名登入
   if(user && user.isAnonymous){
     await auth.signOut();
     alert('❌ 禁止匿名登入');
-    return;
-  }
-
-  // 沒 email 直接踢
-  if(user && !user.email){
-    await auth.signOut();
-    alert('❌ 必須使用正式帳號登入');
     return;
   }
 
@@ -5266,8 +5268,7 @@ auth.onAuthStateChanged(async user=>{
 
   if (user) {
     currentUser = user;
-  if (user) {
-    currentUser = user;
+
 
     // ★ 先確認是否在待審核名單（users 裡沒有資料代表還未批准）
     const userSnap = await db.ref(`users/${user.uid}`).once('value');
