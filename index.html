@@ -4481,6 +4481,17 @@ body.dark-mode .poll-bubble{
       <div class="announce-text" id="announce-text">尚無公告</div>
       <button class="announce-close" onclick="document.getElementById('announce-bar').classList.remove('show')">✕</button>
     </div>
+    <div id="load-more-btn"
+     onclick="loadMoreMessages()"
+     style="
+       padding:10px;
+       text-align:center;
+       cursor:pointer;
+       color:#8ab4ff;
+       font-size:0.85rem;
+     ">
+  載入更舊訊息
+</div>
     <div id="msg-container"></div>
 
     <!-- DM 私訊視窗 (覆蓋主聊天) -->
@@ -5459,8 +5470,10 @@ function setChannel(ch){
 // ============================================================
 // MESSAGES
 // ============================================================
+let firstMessageLoad = true;
 function listenMessages(ch){
-  const ref = db.ref(`msgs/${ch}`);
+let messageLimit = 50;
+  const ref = db.ref(`msgs/${ch}`).limitToLast(messageLimit);
   
   ref.on('child_added', s=>{
     renderMsg(s.key, s.val());
@@ -5485,9 +5498,17 @@ function listenMessages(ch){
 
   // 當初始歷史紀錄全部抓取完畢後，強制將捲軸拉到最底
   ref.once('value').then(() => {
+
+  if(firstMessageLoad){
+
     setTimeout(scrollToBottom, 150);
     setTimeout(scrollToBottom, 600);
-  });
+
+    firstMessageLoad = false;
+  }
+
+});
+
 }
 
 function sendMsg(){
@@ -6041,6 +6062,15 @@ function showToast(msg, type=''){
 // ============================================================
 const msgCont=document.getElementById('msg-container');
 function scrollToBottom(){ msgCont.scrollTop=msgCont.scrollHeight; }
+function loadMoreMessages(){
+
+  messageLimit += 50;
+
+  msgCont.innerHTML = '';
+
+  listenMessages(currentChannel);
+
+}
 function autoScrollIfNeeded(){ if(msgCont.scrollHeight-msgCont.scrollTop-msgCont.clientHeight<180) scrollToBottom(); }
 msgCont.addEventListener('scroll',()=>{
   document.getElementById('scroll-btn').classList.toggle('show', msgCont.scrollHeight-msgCont.scrollTop-msgCont.clientHeight>180);
