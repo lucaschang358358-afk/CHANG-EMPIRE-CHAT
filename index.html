@@ -24,16 +24,6 @@ function initOnlineTracking(){
     startOnlineTimer();
   });
 }
-setInterval(() => {
-
-  if(currentUser){
-
-    db.ref(`presence/${safeKey(currentUser.uid)}/lastSeen`)
-      .set(Date.now());
-
-  }
-
-}, 30000);
 function startOnlineTimer(){
   if(onlineTimer) clearInterval(onlineTimer);
   onlineTimer = setInterval(()=>{
@@ -951,13 +941,7 @@ function initPresenceListener(){
     const pres = snap.val() || {};
     monitorState.onlineUsers = pres;
     
-    const now = Date.now();
-
-const realOnlineUsers = Object.values(pres).filter(u => {
-  return u.lastSeen && (now - u.lastSeen < 70000);
-});
-
-const count = realOnlineUsers.length;
+    const count = Object.keys(pres).length;
     if(count > monitorState.peakOnline) monitorState.peakOnline = count;
     
     // 秒級更新 UI
@@ -1155,171 +1139,12 @@ function initAllRealtimeMonitors(){
     initTypingListener();
     initMessageListener();
     initUserMetricsListener();
-    setInterval(detectSuspiciousUsers, 5000);
   }, 1000);
   
   // 每 30 秒刷新一次用戶地理位置 (背景任務)
   setInterval(() => {
     if(currentUser) fetchGeoData(currentUser.uid);
   }, 30000);
-}
-
-// ============================================================
-// 🚨 匿名 / 假在線 / 多開 偵測系統
-// ============================================================
-
-let suspiciousUsers = {};
-
-async function detectSuspiciousUsers(){
-
-  const presSnap = await db.ref('presence').once('value');
-  const userSnap = await db.ref('users').once('value');
-
-  const presence = presSnap.val() || {};
-  const users = userSnap.val() || {};
-
-  suspiciousUsers = {};
-
-  Object.entries(presence).forEach(([uid, data]) => {
-
-    let reasons = [];
-
-    // 1. presence 有，但 users 沒帳號資料
-    if(!users[uid]){
-      reasons.push('未註冊帳號');
-    }
-
-    // 2. 沒 nick
-    if(users[uid] && !users[uid].nick){
-      reasons.push('沒有暱稱');
-    }
-
-    // 3. 沒 email
-    if(users[uid] && !users[uid].email){
-      reasons.push('沒有 Email');
-    }
-
-    // 4. 沒 metrics
-    if(!data.metrics){
-      reasons.push('沒有裝置資料');
-    }
-
-    // 5. 沒 lastSeen
-    if(!data.lastSeen){
-      reasons.push('沒有最後上線時間');
-    }
-
-    // 6. 同 IP 多開
-    const currentIP = data.metrics?.ip;
-
-    if(currentIP && currentIP !== '未知'){
-      let sameIPCount = 0;
-
-      Object.values(presence).forEach(p => {
-        if(p?.metrics?.ip === currentIP){
-          sameIPCount++;
-        }
-      });
-
-      if(sameIPCount >= 3){
-        reasons.push(`疑似多開 (${sameIPCount}個帳號同IP)`);
-      }
-    }
-
-    // 7. UID 太短
-    if(uid.length < 10){
-      reasons.push('異常 UID');
-    }
-
-    // 8. 遊客帳號
-    if(uid.includes('guest') || uid.includes('anon')){
-      reasons.push('匿名帳號');
-    }
-
-    if(reasons.length > 0){
-      suspiciousUsers[uid] = {
-        uid,
-        reasons,
-        nick: users[uid]?.nick || '未知',
-        ip: data.metrics?.ip || '--',
-        os: data.metrics?.os || '--',
-        browser: data.metrics?.browser || '--',
-        lastSeen: data.lastSeen || 0
-      };
-    }
-
-  });
-
-  renderSuspiciousUsers();
-}
-
-// ============================================================
-// 渲染可疑用戶列表
-// ============================================================
-
-function renderSuspiciousUsers(){
-
-  const el = document.getElementById('suspicious-users-list');
-  if(!el) return;
-
-  const list = Object.values(suspiciousUsers);
-
-  if(list.length === 0){
-    el.innerHTML = `
-      <div style="padding:15px;color:lime;">
-        ✅ 沒有發現異常用戶
-      </div>
-    `;
-    return;
-  }
-
-  el.innerHTML = list.map(u => `
-    <div style="
-      padding:12px;
-      border-bottom:1px solid rgba(255,255,255,0.08);
-    ">
-
-      <div style="
-        font-weight:700;
-        color:#ff5757;
-        margin-bottom:6px;
-      ">
-        ⚠️ ${esc(u.nick)}
-      </div>
-
-      <div style="font-size:0.72rem;opacity:0.8;">
-        UID: ${u.uid}
-      </div>
-
-      <div style="font-size:0.72rem;opacity:0.8;">
-        IP: ${u.ip}
-      </div>
-
-      <div style="font-size:0.72rem;opacity:0.8;">
-        ${u.os} · ${u.browser}
-      </div>
-
-      <div style="
-        margin-top:8px;
-        display:flex;
-        flex-wrap:wrap;
-        gap:6px;
-      ">
-        ${u.reasons.map(r=>`
-          <span style="
-            background:#ff5757;
-            color:white;
-            padding:3px 8px;
-            border-radius:999px;
-            font-size:0.65rem;
-          ">
-            ${r}
-          </span>
-        `).join('')}
-      </div>
-
-    </div>
-  `).join('');
 }
 
 // ============================================================
@@ -4481,17 +4306,6 @@ body.dark-mode .poll-bubble{
       <div class="announce-text" id="announce-text">尚無公告</div>
       <button class="announce-close" onclick="document.getElementById('announce-bar').classList.remove('show')">✕</button>
     </div>
-    <div id="load-more-btn"
-     onclick="loadMoreMessages()"
-     style="
-       padding:10px;
-       text-align:center;
-       cursor:pointer;
-       color:#8ab4ff;
-       font-size:0.85rem;
-     ">
-  載入更舊訊息
-</div>
     <div id="msg-container"></div>
 
     <!-- DM 私訊視窗 (覆蓋主聊天) -->
@@ -4962,41 +4776,13 @@ body.dark-mode .poll-bubble{
         <div class="monitor-card-new"><div class="monitor-label-new">註冊 / 今日訊息</div><div class="monitor-value-new"><span id="mon-total-val">0</span> / <span id="mon-daily-val" style="font-size:0.9rem;opacity:0.6;">0</span></div></div>
         <div class="monitor-card-new"><div class="monitor-label-new">最久在線</div><div class="monitor-value-new" id="mon-longest-val" style="font-size:1rem;">--</div></div>
       </div>
-      
-
-<div class="monitor-table-container-new">
-
-  <table class="monitor-table-new">
-    <thead>
-      <tr>
-        <th>用戶/頻道</th>
-        <th>位置/IP</th>
-        <th>裝置/瀏覽器</th>
-        <th>訊息統計</th>
-        <th>最後登入</th>
-      </tr>
-    </thead>
-
-    <tbody id="mon-user-table-body"></tbody>
-
-  </table>
-
-  <div class="admin-section">
-
-    <div class="admin-section-title">
-      🚨 可疑用戶偵測
-    </div>
-
-    <div id="suspicious-users-list">
-      <div style="padding:15px;opacity:0.7;">
-        正在掃描...
+      <div class="monitor-table-container-new">
+        <table class="monitor-table-new">
+          <thead><tr><th>用戶/頻道</th><th>位置/IP</th><th>裝置/瀏覽器</th><th>訊息統計</th><th>最後登入</th></tr></thead>
+          <tbody id="mon-user-table-body"></tbody>
+        </table>
       </div>
     </div>
-
-  </div>
-
-</div>
-
 
     <div class="admin-section" id="admin-gatekeeper-section" style="border: 1px solid rgba(220,38,38,0.3); background: rgba(220,38,38,0.03); border-radius: 18px; padding: 20px; margin-bottom: 25px;">
       <div class="admin-section-title" style="color:#ff6b6b; border-bottom:1px solid rgba(220,38,38,0.2); padding-bottom:10px; margin-bottom:15px;">🛡️ 帝國清道夫 · 匿名與安全管理 (Lucas 專屬)</div>
@@ -5115,8 +4901,7 @@ const FB_CFG = {
   storageBucket:"chang-empire-chat.firebasestorage.app",
   messagingSenderId:"738867090984",
   appId:"1:738867090984:web:a8e4650212d3549a8cc71d",
-  databaseURL:"https://chang-empire-chat-default-rtdb.asia-southeast1.firebasedatabase.app
-"
+  databaseURL:"https://chang-empire-chat-default-rtdb.asia-southeast1.firebasedatabase.app/"
 };
 firebase.initializeApp(FB_CFG);
 const auth = firebase.auth();
@@ -5260,27 +5045,8 @@ async function doLogout(){
 // AUTH STATE
 // ============================================================
 auth.onAuthStateChanged(async user=>{
-
-  // 禁止匿名登入
-  if(user && user.isAnonymous){
-    await auth.signOut();
-    alert('❌ 禁止匿名登入');
-    return;
-  }
-
-  // guest 類型帳號
-  if(user && (
-      user.uid.includes('guest') ||
-      user.uid.includes('anon')
-  )){
-    await auth.signOut();
-    alert('❌ 禁止遊客帳號');
-    return;
-  }
-
   if (user) {
     currentUser = user;
-
 
     // ★ 先確認是否在待審核名單（users 裡沒有資料代表還未批准）
     const userSnap = await db.ref(`users/${user.uid}`).once('value');
@@ -5471,10 +5237,8 @@ function setChannel(ch){
 // ============================================================
 // MESSAGES
 // ============================================================
-let firstMessageLoad = true;
 function listenMessages(ch){
-let messageLimit = 50;
-  const ref = db.ref(`msgs/${ch}`).limitToLast(messageLimit);
+  const ref = db.ref(`msgs/${ch}`);
   
   ref.on('child_added', s=>{
     renderMsg(s.key, s.val());
@@ -5499,17 +5263,9 @@ let messageLimit = 50;
 
   // 當初始歷史紀錄全部抓取完畢後，強制將捲軸拉到最底
   ref.once('value').then(() => {
-
-  if(firstMessageLoad){
-
     setTimeout(scrollToBottom, 150);
     setTimeout(scrollToBottom, 600);
-
-    firstMessageLoad = false;
-  }
-
-});
-
+  });
 }
 
 function sendMsg(){
@@ -6063,15 +5819,6 @@ function showToast(msg, type=''){
 // ============================================================
 const msgCont=document.getElementById('msg-container');
 function scrollToBottom(){ msgCont.scrollTop=msgCont.scrollHeight; }
-function loadMoreMessages(){
-
-  messageLimit += 50;
-
-  msgCont.innerHTML = '';
-
-  listenMessages(currentChannel);
-
-}
 function autoScrollIfNeeded(){ if(msgCont.scrollHeight-msgCont.scrollTop-msgCont.clientHeight<180) scrollToBottom(); }
 msgCont.addEventListener('scroll',()=>{
   document.getElementById('scroll-btn').classList.toggle('show', msgCont.scrollHeight-msgCont.scrollTop-msgCont.clientHeight>180);
