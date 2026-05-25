@@ -4191,6 +4191,12 @@ body.dark-mode .poll-bubble{
   margin-left: 5px;
 }
 
+.dm-read-status {
+  font-size: 0.6rem;
+  font-weight: bold;
+  opacity: 0.8;
+}
+
 </style>
 </head>
 <body>
@@ -4573,7 +4579,7 @@ body.dark-mode .poll-bubble{
 <div class="modal-overlay" id="add-ch-modal">
   <div class="modal-card" style="width:360px;">
     <div class="modal-header">
-      <span class="modal-title">➕ 新增頻道</span>
+      <span class="modal-title">🆕 創建新帝國頻道</span>
       <button class="modal-close" onclick="closeModal('add-ch-modal')">✕</button>
     </div>
     <div class="auth-field">
@@ -4582,11 +4588,18 @@ body.dark-mode .poll-bubble{
     </div>
     <div class="auth-field">
       <label class="auth-label">選擇圖示</label>
-      <div class="ch-modal-row" id="ch-emoji-row"></div>
+      <div class="ch-modal-row" id="ch-emoji-row" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
     </div>
-    <button class="auth-btn" onclick="createChannel()" style="margin-top:4px;">🚀 建立頻道</button>
+    <div class="auth-field">
+      <label class="auth-label">邀請成員 (不選則為公開)</label>
+      <div id="new-ch-members" style="max-height:150px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; padding:10px; background: rgba(255,255,255,0.05);">
+        <!-- 這裡會由 JS 動態填入好友列表 -->
+      </div>
+    </div>
+    <button class="auth-btn" onclick="createChannel()" style="margin-top:20px;">🚀 建立並保存</button>
   </div>
 </div>
+
 
 <!-- ============================
      LIGHTBOX
@@ -4979,6 +4992,7 @@ let isTyping = false;
 let oldestMsgKey = null;   // 目前已載入的最舊訊息 key
 let isLoadingMore = false; // 防止重複加載
 let allMsgsLoaded = false; // 已無更多舊訊息
+let initialLoadDone = false; // 新增：標記初始加載是否完成
 const MSG_PAGE_SIZE = 50;  // 每次加載條數
 let muted = false;
 let pinnedOpen = false;
@@ -5240,7 +5254,31 @@ function setChannel(ch){
   listenTyping(ch);
   listenPinned(ch);
   setTimeout(markVisibleMsgsRead,1500);
+
+    initialLoadDone = false; // 切換頻道時重置
+  listenMessages(ch);
+  listenTyping(ch);
+  listenPinned(ch);
+  setTimeout(markVisibleMsgsRead, 1500);
+
+  const container = document.getElementById('msg-container');
+  if (container) {
+    container.onscroll = () => {
+      // 只有在初始加載完成且滑到底部後，才允許觸發「向上加載舊訊息」
+      if (initialLoadDone && container.scrollTop < 20 && !isLoadingMore && !allMsgsLoaded) {
+        loadMoreMessages();
+      }
+      
+      if (container.scrollHeight - container.scrollTop - container.clientHeight < 100) {
+        const navNew = document.getElementById('nav-new-msg');
+        if (navNew) navNew.style.display = 'none';
+        hasNewMsgsBelow = false;
+      }
+    };
+  }
 }
+
+
 
 // ============================================================
 // MESSAGES
@@ -5381,12 +5419,18 @@ function listenMessages(ch){
       });
     });
 
-    // 記錄最舊的 key（用於加載更多）
+        // 記錄最舊的 key（用於加載更多）
     if(keys.length > 0) oldestMsgKey = keys[0];
 
-    // 初始加載完成後，滾到底部一次
-    initialLoadDone = true;
-    setTimeout(()=>{ scrollToBottom(); }, 100);
+    // 抓完訊息後，先執行滾到底部
+    setTimeout(() => {
+      scrollToBottom();
+      // 延遲一下下，確定滾動到位了，再開啟「向上滑加載」功能
+      setTimeout(() => { 
+        initialLoadDone = true; 
+      }, 800);
+    }, 200);
+
 
     // 在頂部插入「加載更多」按鈕
     const container = document.getElementById('msg-container');
@@ -6062,13 +6106,35 @@ function _doMarkRead(){
 // ============================================================
 // CUSTOM CHANNELS
 // ============================================================
-function openAddChannel(){
+async function openAddChannel(){
   selectedChEmoji='💬';
   document.getElementById('new-ch-name').value='';
+  
+  // 渲染圖標
   const row=document.getElementById('ch-emoji-row');
   row.innerHTML=CH_EMOJI_OPTS.map(e=>
     `<span class="ch-emoji-opt${e==='💬'?' sel':''}" onclick="pickChEmoji(this,'${e}')">${e}</span>`
   ).join('');
+
+  // 渲染好友列表供選擇
+  const memberList = document.getElementById('new-ch-members');
+  memberList.innerHTML = '<div style="padding:10px;text-align:center;">正在召集帝國臣民...</div>';
+  
+  const snap = await db.ref('users').once('value');
+  const users = snap.val() || {};
+  
+  let membersHTML = '';
+  Object.entries(users).forEach(([uid, u]) => {
+    if(uid === currentUser.uid) return; // 跳過自己
+    membersHTML += `
+      <div style="display:flex; align-items:center; margin-bottom:8px; padding:4px; border-bottom:1px solid rgba(255,255,255,0.05);">
+        <input type="checkbox" class="ch-member-cb" value="${uid}" id="cb-${uid}" style="width:18px;height:18px;cursor:pointer;">
+        <label for="cb-${uid}" style="margin-left:10px; cursor:pointer; flex:1; font-size:0.9rem;">${esc(u.nick || '未知')}</label>
+      </div>
+    `;
+  });
+  memberList.innerHTML = membersHTML || '<div style="padding:10px;text-align:center;opacity:0.5;">尚無其他臣民</div>';
+
   document.getElementById('add-ch-modal').classList.add('open');
   setTimeout(()=>document.getElementById('new-ch-name').focus(),100);
 }
@@ -6082,11 +6148,25 @@ function pickChEmoji(el,em){
 function createChannel(){
   const name=document.getElementById('new-ch-name').value.trim();
   if(!name){ showToast('⚠️ 請輸入頻道名稱','warn'); return; }
+  
+  // 獲取選中的成員
+  const selectedMembers = Array.from(document.querySelectorAll('.ch-member-cb:checked')).map(cb => cb.value);
+  // 必須包含自己
+  selectedMembers.push(currentUser.uid);
+
   const key='ch_'+Date.now();
-  const ch={name,icon:selectedChEmoji,createdBy:currentUser.uid,createdAt:Date.now()};
+  const ch={
+    name,
+    icon:selectedChEmoji,
+    createdBy:currentUser.uid,
+    createdAt:Date.now(),
+    members: selectedMembers, // 保存成員名單
+    isPrivate: selectedMembers.length > 1 // 如果選了人，就是私密頻道
+  };
+
   db.ref(`customChannels/${key}`).set(ch).then(()=>{
     closeModal('add-ch-modal');
-    showToast(`✅ 頻道「${name}」已建立`,'success');
+    showToast(`✅ 頻道「${name}」已建立並保存`,'success');
   });
 }
 
@@ -6096,6 +6176,9 @@ function listenCustomChannels(){
     list.innerHTML='';
     const chs=snap.val()||{};
     Object.entries(chs).forEach(([key,ch])=>{
+      // 權限檢查：如果是私密頻道，且我不在成員名單中，就隱藏
+      if(ch.isPrivate && (!ch.members || !ch.members.includes(currentUser.uid))) return;
+
       CHANNELS[key]={name:ch.name,icon:ch.icon};
       const div=document.createElement('div');
       div.className='ch-item'+(currentChannel===key?' active':'');
@@ -6107,6 +6190,7 @@ function listenCustomChannels(){
     });
   });
 }
+
 
 // ============================================================
 // CHANNEL CONTEXT MENU
@@ -7383,8 +7467,10 @@ function openDmWindow(uid, nick, avatarUrl){
   if(dmListener) dmListener.off && dmListener.off();
   const dmKey = getDmKey(currentUser.uid, uid);
   document.getElementById('dm-msgs').innerHTML='';
-  dmListener = db.ref(`dms/${dmKey}`);
-  dmListener.on('child_added', s=>renderDmMsg(s.val()));
+    dmListener = db.ref(`dms/${dmKey}`);
+  // 傳入 s.val() 和 s.key
+  dmListener.on('child_added', s=>renderDmMsg(s.val(), s.key));
+
   dmListener.once('value').then(()=>{ setTimeout(()=>{ const el=document.getElementById('dm-msgs'); el.scrollTop=el.scrollHeight; },200); });
   setTimeout(()=>document.getElementById('dm-input').focus(),100);
 }
@@ -7400,16 +7486,47 @@ function getDmKey(uid1, uid2){
   return a<b?`${a}_${b}`:`${b}_${a}`;
 }
 
-function renderDmMsg(data){
+function renderDmMsg(data, msgKey){ // 增加 msgKey 參數
   if(!currentUser) return;
   const isMe = data.uid===currentUser.uid;
   const div = document.createElement('div');
+  div.id = `dm-msg-${msgKey}`; // 給每條訊息一個 ID
   div.className=`dm-msg ${isMe?'dm-me':'dm-other'}`;
-  div.innerHTML=`<div class="dm-bubble">${esc(data.text||'')}</div><div class="dm-meta">${data.time||''}</div>`;
+  
+  // 這裡加入了 dm-read-status 區塊
+  div.innerHTML=`
+    <div class="dm-bubble">${esc(data.text||'')}</div>
+    <div class="dm-meta">
+      ${data.time||''} 
+      ${isMe ? `<span class="dm-read-status" id="dm-read-${msgKey}"></span>` : ''}
+    </div>
+  `;
+  
   document.getElementById('dm-msgs').appendChild(div);
+  
+  // 如果是對方發的，且我正在看，就標記為已讀
+  if(!isMe && msgKey) {
+    const dmKey = getDmKey(currentUser.uid, dmPeerUid);
+    db.ref(`dms/${dmKey}/${msgKey}/readBy/${currentUser.uid}`).set(true);
+  }
+
+  // 如果是我發的，監聽對方的已讀狀態
+  if(isMe && msgKey) {
+    const dmKey = getDmKey(currentUser.uid, dmPeerUid);
+    db.ref(`dms/${dmKey}/${msgKey}/readBy`).on('value', snap => {
+      const readBy = snap.val() || {};
+      const el = document.getElementById(`dm-read-${msgKey}`);
+      if(!el) return;
+      // 如果除了我以外有人讀了（私訊就是對方）
+      const isRead = Object.keys(readBy).some(uid => uid !== currentUser.uid);
+      el.innerHTML = isRead ? '<span style="color:var(--gold); margin-left:4px;">已讀</span>' : '';
+    });
+  }
+
   const el=document.getElementById('dm-msgs');
   el.scrollTop=el.scrollHeight;
 }
+
 
 function sendDm(){
   const input=document.getElementById('dm-input');
