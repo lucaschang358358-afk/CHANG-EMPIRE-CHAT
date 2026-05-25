@@ -567,6 +567,37 @@ function showModal(title, content){
 }
 function isAdminLike(){ return profile?.nick === 'Lucas'; }
 
+// 訊息泡泡顏色
+const BUBBLE_COLORS = {
+  default: 'linear-gradient(135deg,rgba(124,92,223,.32),rgba(90,61,184,.25))',
+  blue:    'linear-gradient(135deg,rgba(59,130,246,.35),rgba(37,99,235,.25))',
+  green:   'linear-gradient(135deg,rgba(16,185,129,.35),rgba(5,150,105,.25))',
+  red:     'linear-gradient(135deg,rgba(239,68,68,.35),rgba(185,28,28,.25))',
+  gold:    'linear-gradient(135deg,rgba(245,158,11,.35),rgba(180,83,9,.25))',
+  pink:    'linear-gradient(135deg,rgba(236,72,153,.35),rgba(157,23,77,.25))',
+};
+function applyBubbleColor(){
+  const saved = localStorage.getItem('empire_bubble_color');
+  const savedCustom = localStorage.getItem('empire_bubble_color_custom');
+  let bg = BUBBLE_COLORS.default;
+  if(savedCustom) bg = `linear-gradient(135deg,${savedCustom}aa,${savedCustom}66)`;
+  else if(saved && BUBBLE_COLORS[saved]) bg = BUBBLE_COLORS[saved];
+  let st = document.getElementById('bubble-color-style');
+  if(!st){ st = document.createElement('style'); st.id='bubble-color-style'; document.head.appendChild(st); }
+  st.textContent = `.me .msg-bubble{ background:${bg} !important; }`;
+}
+function setBubbleColor(name){
+  localStorage.setItem('empire_bubble_color', name);
+  localStorage.removeItem('empire_bubble_color_custom');
+  showToast('🎨 訊息顏色已更新','success');
+}
+function setBubbleColorCustom(hex){
+  localStorage.setItem('empire_bubble_color_custom', hex);
+  localStorage.removeItem('empire_bubble_color');
+  applyBubbleColor();
+}
+applyBubbleColor();
+
 
 // ============================================================
 // v17 上帝視角 Pro - 監控邏輯
@@ -2180,7 +2211,7 @@ body::before{
 .me .msg-bubble{
   background:linear-gradient(135deg,rgba(124,92,223,.32),rgba(90,61,184,.25));
   border:1px solid rgba(124,92,223,.38);
-  border-bottom-right-radius:5px;color:#fff;
+  border-bottom-right-radius:5px;color:#000;
 }
 
 /* Pinned bubble */
@@ -4509,6 +4540,20 @@ body.dark-mode .poll-bubble{
       </div>
     </div>
 
+<!-- 訊息泡泡顏色 -->
+    <div class="setting-row" style="border:none;flex-direction:column;align-items:flex-start;gap:8px;margin-top:12px;">
+      <div><div class="setting-label">🎨 我的訊息顏色</div><div class="setting-sub">自訂自己訊息泡泡的顏色</div></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(124,92,223,.32),rgba(90,61,184,.25));border:2px solid rgba(124,92,223,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('default')" title="預設紫色"></div>
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(59,130,246,.35),rgba(37,99,235,.25));border:2px solid rgba(59,130,246,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('blue')" title="藍色"></div>
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(16,185,129,.35),rgba(5,150,105,.25));border:2px solid rgba(16,185,129,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('green')" title="綠色"></div>
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(239,68,68,.35),rgba(185,28,28,.25));border:2px solid rgba(239,68,68,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('red')" title="紅色"></div>
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(245,158,11,.35),rgba(180,83,9,.25));border:2px solid rgba(245,158,11,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('gold')" title="金色"></div>
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(236,72,153,.35),rgba(157,23,77,.25));border:2px solid rgba(236,72,153,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('pink')" title="粉紅"></div>
+        <input type="color" id="bubble-color-picker" value="#7c5cdf" style="width:28px;height:28px;border-radius:8px;border:2px solid var(--border);cursor:pointer;padding:0;" title="自訂顏色" oninput="setBubbleColorCustom(this.value)">
+      </div>
+    </div>
+
     <!-- 危險區 -->
     <div style="margin-top:22px;padding-top:18px;border-top:1px solid rgba(248,113,113,.2);">
       <button class="logout-btn" style="margin-bottom:0;" onclick="doLogout()">🚪 登出帝國</button>
@@ -4874,21 +4919,6 @@ body.dark-mode .poll-bubble{
   <div class="blocked-sub">大張帝國已將你封鎖。<br>如有異議請聯絡帝國管理員。</div>
 </div>
 
-<!-- ★ 待審核等待畫面 -->
-<div id="pending-screen">
-  <div class="pending-card">
-    <div class="pending-spinner"></div>
-    <div class="pending-title">⏳ 等待帝國批准</div>
-    <div class="pending-nick-txt" id="pending-nick-display"></div>
-    <div class="pending-sub">
-      你的入籍申請已成功送出<br>
-      請等待皇帝 <strong style="color:var(--gold2);">Lucas</strong> 審核<br>
-      批准後將自動進入帝國，無需重新登入
-    </div>
-    <button class="pending-cancel-btn" onclick="cancelPendingAndLogout()">取消申請並登出</button>
-  </div>
-</div>
-
 
 <script>
 // ============================================================
@@ -4981,9 +5011,8 @@ async function doAuth(){
     if (authMode==='register') {
       if (!nick.trim()){ showAuthErr('請輸入帝國聖號'); btn.disabled=false; btn.textContent='📋 建立帳號'; return; }
       const cred = await auth.createUserWithEmailAndPassword(email,pw);
-      // ★ 送出待審核申請，不直接建立 profile
-      await submitPendingRegistration(cred.user, nick.trim());
-      // 讓 onAuthStateChanged 接手顯示等待畫面
+            await initProfile(cred.user, nick.trim(), email);
+
     } else {
       await auth.signInWithEmailAndPassword(email,pw);
     }
@@ -5051,44 +5080,10 @@ auth.onAuthStateChanged(async user=>{
     // ★ 先確認是否在待審核名單（users 裡沒有資料代表還未批准）
     const userSnap = await db.ref(`users/${user.uid}`).once('value');
     if (!userSnap.exists()) {
-      // 檢查是否有 pending 記錄
-      const pendSnap = await db.ref(`pendingRegistrations/${safeKey(user.uid)}`).once('value');
-      const pendData = pendSnap.val();
-      if (pendData && pendData.status !== 'rejected') {
-        // 顯示等待畫面
-        document.getElementById('auth-screen').style.display='none';
-        const ps = document.getElementById('pending-screen');
-        if(ps){
-          ps.classList.add('show');
-          const nd = document.getElementById('pending-nick-display');
-          if(nd) nd.textContent = pendData.nick||'';
-        }
-        // 監聽審核結果
-        db.ref(`pendingRegistrations/${safeKey(user.uid)}`).on('value', async s2=>{
-          if(!s2.exists()){
-            // 被批准（記錄已刪） → 重新載入
-            document.getElementById('pending-screen')?.classList.remove('show');
-            window.location.reload();
-          } else if(s2.val()?.status === 'rejected'){
-            document.getElementById('pending-screen')?.classList.remove('show');
-            document.getElementById('auth-screen').style.display='flex';
-            showAuthErr('⛔ 你的入籍申請已被拒絕，請聯絡管理員。');
-            await auth.signOut();
-          }
-        });
-        return; // 不繼續進入 app
-      } else if (pendData?.status === 'rejected') {
-        document.getElementById('auth-screen').style.display='flex';
-        showAuthErr('⛔ 你的入籍申請已被拒絕，請聯絡管理員。');
-        await auth.signOut();
-        return;
-      } else {
-        // 沒有 users 也沒有 pending → 不明帳號，強制登出
-        await auth.signOut();
-        return;
-      }
+      await initProfile(user, user.email.split('@')[0], user.email);
+      window.location.reload();
+      return;
     }
-
     // ★ 正常登入
     profile = userSnap.val();
     if (!profile.nick) profile.nick = user.email.split('@')[0];
@@ -8261,8 +8256,7 @@ function showAdminSecurityModal(title, html){
 }
 
 </script>
-
-
+<script>applyBubbleColor();</script>
 
 
 </body>
