@@ -193,22 +193,7 @@ function bookmarkMsg(key, data){
 
 // 5. 快速導航與新訊息
 function initNavigation(){
-  const msgs = document.getElementById('msgs');
-  msgs.addEventListener('scroll', ()=>{
-    const isBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 100;
-    document.getElementById('nav-to-bottom').style.display = isBottom ? 'none' : 'flex';
-    if(isBottom){
-      hasNewMsgsBelow = false;
-      document.getElementById('nav-new-msg').style.display = 'none';
-    }
-  });
-}
-
-function scrollToBottom(){
-  const msgs = document.getElementById('msgs');
-  msgs.scrollTo({ top: msgs.scrollHeight, behavior: 'smooth' });
-  hasNewMsgsBelow = false;
-  document.getElementById('nav-new-msg').style.display = 'none';
+  // v12 navigation 已由主程式的 #msg-container scroll 監聽接管，此處保留空函數避免錯誤
 }
 
 // 覆寫渲染與訊息處理
@@ -239,12 +224,14 @@ window.buildMsgHTML = function(g, key, data){
 
 const _v12RenderMsg = window.renderMsg;
 window.renderMsg = function(key, data){
-  const msgs = document.getElementById('msgs');
+  const msgs = document.getElementById('msg-container');
+  if(!msgs){ _v12RenderMsg(key, data); return; }
   const isBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 150;
   _v12RenderMsg(key, data);
   if(!isBottom && data.uid !== currentUser?.uid){
     hasNewMsgsBelow = true;
-    document.getElementById('nav-new-msg').style.display = 'flex';
+    const navNew = document.getElementById('nav-new-msg');
+    if(navNew) navNew.style.display = 'flex';
   }
 };
 
@@ -566,6 +553,37 @@ function showModal(title, content){
   modal.onclick = (e)=>{ if(e.target===modal) modal.remove(); };
 }
 function isAdminLike(){ return profile?.nick === 'Lucas'; }
+
+// 訊息泡泡顏色
+const BUBBLE_COLORS = {
+  default: 'linear-gradient(135deg,rgba(124,92,223,.32),rgba(90,61,184,.25))',
+  blue:    'linear-gradient(135deg,rgba(59,130,246,.35),rgba(37,99,235,.25))',
+  green:   'linear-gradient(135deg,rgba(16,185,129,.35),rgba(5,150,105,.25))',
+  red:     'linear-gradient(135deg,rgba(239,68,68,.35),rgba(185,28,28,.25))',
+  gold:    'linear-gradient(135deg,rgba(245,158,11,.35),rgba(180,83,9,.25))',
+  pink:    'linear-gradient(135deg,rgba(236,72,153,.35),rgba(157,23,77,.25))',
+};
+function applyBubbleColor(){
+  const saved = localStorage.getItem('empire_bubble_color');
+  const savedCustom = localStorage.getItem('empire_bubble_color_custom');
+  let bg = BUBBLE_COLORS.default;
+  if(savedCustom) bg = `linear-gradient(135deg,${savedCustom}aa,${savedCustom}66)`;
+  else if(saved && BUBBLE_COLORS[saved]) bg = BUBBLE_COLORS[saved];
+  let st = document.getElementById('bubble-color-style');
+  if(!st){ st = document.createElement('style'); st.id='bubble-color-style'; document.head.appendChild(st); }
+  st.textContent = `.me .msg-bubble{ background:${bg} !important; }`;
+}
+function setBubbleColor(name){
+  localStorage.setItem('empire_bubble_color', name);
+  localStorage.removeItem('empire_bubble_color_custom');
+  showToast('🎨 訊息顏色已更新','success');
+}
+function setBubbleColorCustom(hex){
+  localStorage.setItem('empire_bubble_color_custom', hex);
+  localStorage.removeItem('empire_bubble_color');
+  applyBubbleColor();
+}
+applyBubbleColor();
 
 
 // ============================================================
@@ -2131,6 +2149,25 @@ body::before{
 #msg-container::-webkit-scrollbar{width:4px;}
 #msg-container::-webkit-scrollbar-thumb{background:rgba(0,0,0,.12);border-radius:4px;}
 
+/* Load more button */
+.load-more-btn{
+  display:flex;align-items:center;justify-content:center;
+  padding:10px 20px;margin:8px auto 16px;
+  background:var(--glass2);border:1px solid var(--border2);
+  border-radius:20px;cursor:pointer;
+  font-size:.78rem;font-family:'JetBrains Mono',monospace;
+  color:var(--text2);transition:all .22s;
+  width:fit-content;min-width:160px;
+  user-select:none;
+}
+.load-more-btn:hover:not([disabled]){
+  border-color:var(--purple2);color:var(--purple2);
+  background:rgba(124,92,223,.08);
+}
+.load-more-btn[disabled]{
+  cursor:default;opacity:.55;
+}
+
 /* Date divider */
 .date-div{
   display:flex;align-items:center;gap:12px;margin:18px 0 6px;
@@ -2180,7 +2217,7 @@ body::before{
 .me .msg-bubble{
   background:linear-gradient(135deg,rgba(124,92,223,.32),rgba(90,61,184,.25));
   border:1px solid rgba(124,92,223,.38);
-  border-bottom-right-radius:5px;color:#fff;
+  border-bottom-right-radius:5px;color:#000;
 }
 
 /* Pinned bubble */
@@ -4509,6 +4546,20 @@ body.dark-mode .poll-bubble{
       </div>
     </div>
 
+<!-- 訊息泡泡顏色 -->
+    <div class="setting-row" style="border:none;flex-direction:column;align-items:flex-start;gap:8px;margin-top:12px;">
+      <div><div class="setting-label">🎨 我的訊息顏色</div><div class="setting-sub">自訂自己訊息泡泡的顏色</div></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(124,92,223,.32),rgba(90,61,184,.25));border:2px solid rgba(124,92,223,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('default')" title="預設紫色"></div>
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(59,130,246,.35),rgba(37,99,235,.25));border:2px solid rgba(59,130,246,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('blue')" title="藍色"></div>
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(16,185,129,.35),rgba(5,150,105,.25));border:2px solid rgba(16,185,129,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('green')" title="綠色"></div>
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(239,68,68,.35),rgba(185,28,28,.25));border:2px solid rgba(239,68,68,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('red')" title="紅色"></div>
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(245,158,11,.35),rgba(180,83,9,.25));border:2px solid rgba(245,158,11,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('gold')" title="金色"></div>
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(236,72,153,.35),rgba(157,23,77,.25));border:2px solid rgba(236,72,153,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('pink')" title="粉紅"></div>
+        <input type="color" id="bubble-color-picker" value="#7c5cdf" style="width:28px;height:28px;border-radius:8px;border:2px solid var(--border);cursor:pointer;padding:0;" title="自訂顏色" oninput="setBubbleColorCustom(this.value)">
+      </div>
+    </div>
+
     <!-- 危險區 -->
     <div style="margin-top:22px;padding-top:18px;border-top:1px solid rgba(248,113,113,.2);">
       <button class="logout-btn" style="margin-bottom:0;" onclick="doLogout()">🚪 登出帝國</button>
@@ -4925,6 +4976,10 @@ let replyTo = null;      // { key, user, text }
 let msgListeners = {};
 let typingTimer = null;
 let isTyping = false;
+let oldestMsgKey = null;   // 目前已載入的最舊訊息 key
+let isLoadingMore = false; // 防止重複加載
+let allMsgsLoaded = false; // 已無更多舊訊息
+const MSG_PAGE_SIZE = 50;  // 每次加載條數
 let muted = false;
 let pinnedOpen = false;
 let lastDateRendered = {};
@@ -5167,6 +5222,9 @@ function setChannel(ch){
   currentChannel=ch;
   lastDateRendered={};
   markedRead=new Set();
+  oldestMsgKey=null;
+  isLoadingMore=false;
+  allMsgsLoaded=false;
 
   // Update sidebar active state using data-ch
   document.querySelectorAll('.ch-item').forEach(el=>el.classList.toggle('active',el.dataset.ch===ch));
@@ -5187,34 +5245,195 @@ function setChannel(ch){
 // ============================================================
 // MESSAGES
 // ============================================================
-function listenMessages(ch){
-  const ref = db.ref(`msgs/${ch}`);
-  
-  ref.on('child_added', s=>{
-    renderMsg(s.key, s.val());
-    // Also watch this message's readBy subtree directly
-    db.ref(`msgs/${ch}/${s.key}/readBy`).on('value', snap=>{
-      const el=document.getElementById(`reads-${s.key}`);
+
+// 加載更多舊訊息（向上翻頁）
+async function loadMoreMessages(){
+  if(isLoadingMore || allMsgsLoaded || !currentChannel) return;
+  isLoadingMore = true;
+
+  const loadMoreBtn = document.getElementById('load-more-btn');
+  if(loadMoreBtn){ loadMoreBtn.textContent='⏳ 加載中...'; loadMoreBtn.disabled=true; }
+
+  const ch = currentChannel;
+  let query = db.ref(`msgs/${ch}`).orderByKey().limitToLast(MSG_PAGE_SIZE + 1);
+  if(oldestMsgKey) query = db.ref(`msgs/${ch}`).orderByKey().endAt(oldestMsgKey).limitToLast(MSG_PAGE_SIZE + 1);
+
+  const snap = await query.once('value');
+  const msgs = snap.val() || {};
+  const keys = Object.keys(msgs).sort();
+
+  // 如果包含 oldestMsgKey 本身，去掉它（避免重複渲染）
+  const newKeys = oldestMsgKey ? keys.filter(k => k < oldestMsgKey) : keys;
+
+  if(newKeys.length === 0){
+    allMsgsLoaded = true;
+    if(loadMoreBtn){ loadMoreBtn.textContent='✅ 已顯示全部訊息'; loadMoreBtn.disabled=true; }
+    isLoadingMore = false;
+    return;
+  }
+
+  // 如果拿到的數量少於一頁，表示沒有更多了
+  if(newKeys.length < MSG_PAGE_SIZE) allMsgsLoaded = true;
+
+  const container = document.getElementById('msg-container');
+  const prevScrollHeight = container.scrollHeight;
+  const prevScrollTop = container.scrollTop;
+
+  // 把舊訊息插入到最頂部（保持時間順序）
+  const tempDiv = document.createElement('div');
+  const oldLastDateRendered = {}; // 暫存，避免影響主 lastDateRendered
+
+  // 先記錄目前已有的日期，避免重複加日期分隔線
+  const existingDates = new Set(Object.keys(lastDateRendered));
+
+  // 從舊到新插入
+  newKeys.forEach(key => {
+    const data = msgs[key];
+    if(!data) return;
+    if(document.getElementById(`msg-${key}`)) return; // 已存在則跳過
+
+    // 日期分隔線（只在這批訊息中新出現的日期才加）
+    if(data.date && !existingDates.has(data.date) && !oldLastDateRendered[data.date]){
+      oldLastDateRendered[data.date] = true;
+      const div = document.createElement('div');
+      div.className = 'date-div';
+      div.innerHTML = `<span class="date-label">${data.date}</span>`;
+      tempDiv.appendChild(div);
+    }
+
+    const g = document.createElement('div');
+    g.className = 'msg-group';
+    g.id = `msg-${key}`;
+    tempDiv.appendChild(g);
+    buildMsgHTML(g, key, data);
+
+    // 監聽 readBy
+    db.ref(`msgs/${ch}/${key}/readBy`).on('value', rsnap=>{
+      const el = document.getElementById(`reads-${key}`);
       if(!el) return;
-      const rb=snap.val()||{};
-      const readers=Object.values(rb).filter(r=>r.uid!==currentUser.uid);
+      const rb = rsnap.val()||{};
+      const readers = Object.values(rb).filter(r=>r.uid!==currentUser.uid);
       if(!readers.length){ el.innerHTML='<span class="read-tick" style="opacity:.3">✓</span>'; return; }
       el.innerHTML='<span class="read-tick">✓✓</span>'+
         readers.map(r=>`<div class="read-av" data-nick="${esc(r.nick||'')}">${(r.nick||'?').charAt(0).toUpperCase()}</div>`).join('');
     });
   });
-  
+
+  // 合併 oldLastDateRendered 到 lastDateRendered
+  Object.assign(lastDateRendered, oldLastDateRendered);
+
+  // 更新 oldestMsgKey
+  if(newKeys.length > 0) oldestMsgKey = newKeys[0];
+
+  // 把 tempDiv 的子節點插入到 container 頂部（在 load-more-btn 之後）
+  const loadMoreBtnEl = document.getElementById('load-more-btn');
+  const insertAfter = loadMoreBtnEl || container.firstChild;
+  const fragment = document.createDocumentFragment();
+  while(tempDiv.firstChild) fragment.appendChild(tempDiv.firstChild);
+  if(loadMoreBtnEl && loadMoreBtnEl.nextSibling){
+    container.insertBefore(fragment, loadMoreBtnEl.nextSibling);
+  } else if(loadMoreBtnEl){
+    container.appendChild(fragment);
+  } else {
+    container.insertBefore(fragment, container.firstChild);
+  }
+
+  // 維持捲軸位置（不讓畫面跳動）
+  const newScrollHeight = container.scrollHeight;
+  container.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+
+  // 更新按鈕狀態
+  if(loadMoreBtn){
+    if(allMsgsLoaded){
+      loadMoreBtn.textContent='✅ 已顯示全部訊息';
+      loadMoreBtn.disabled=true;
+    } else {
+      loadMoreBtn.textContent='⬆️ 加載更多訊息';
+      loadMoreBtn.disabled=false;
+    }
+  }
+
+  isLoadingMore = false;
+}
+
+function listenMessages(ch){
+  const ref = db.ref(`msgs/${ch}`);
+  let initialLoadDone = false;
+  let initialKeys = new Set();
+
+  // 第一步：先用 limitToLast(50) 抓取最新 50 條歷史訊息
+  ref.orderByKey().limitToLast(MSG_PAGE_SIZE).once('value').then(snap=>{
+    const msgs = snap.val() || {};
+    const keys = Object.keys(msgs).sort(); // 從舊到新
+
+    keys.forEach(key=>{
+      initialKeys.add(key);
+      renderMsg(key, msgs[key]);
+      // 監聽 readBy
+      db.ref(`msgs/${ch}/${key}/readBy`).on('value', rsnap=>{
+        const el=document.getElementById(`reads-${key}`);
+        if(!el) return;
+        const rb=rsnap.val()||{};
+        const readers=Object.values(rb).filter(r=>r.uid!==currentUser.uid);
+        if(!readers.length){ el.innerHTML='<span class="read-tick" style="opacity:.3">✓</span>'; return; }
+        el.innerHTML='<span class="read-tick">✓✓</span>'+
+          readers.map(r=>`<div class="read-av" data-nick="${esc(r.nick||'')}">${(r.nick||'?').charAt(0).toUpperCase()}</div>`).join('');
+      });
+    });
+
+    // 記錄最舊的 key（用於加載更多）
+    if(keys.length > 0) oldestMsgKey = keys[0];
+
+    // 初始加載完成後，滾到底部一次
+    initialLoadDone = true;
+    setTimeout(()=>{ scrollToBottom(); }, 100);
+
+    // 在頂部插入「加載更多」按鈕
+    const container = document.getElementById('msg-container');
+    const existingBtn = document.getElementById('load-more-btn');
+    if(!existingBtn){
+      const btn = document.createElement('div');
+      btn.id = 'load-more-btn';
+      btn.className = 'load-more-btn';
+      btn.textContent = '⬆️ 加載更多訊息';
+      btn.onclick = loadMoreMessages;
+      container.insertBefore(btn, container.firstChild);
+    }
+
+    msgListeners[ch] = true;
+  });
+
+  // 第二步：監聽新訊息（只處理初始加載之後的新訊息）
+  // 用 limitToLast(1) 先取最新一條的 key，再監聽之後的新增
+  ref.orderByKey().limitToLast(1).once('value').then(snap=>{
+    const keys = Object.keys(snap.val()||{});
+    const afterKey = keys.length > 0 ? keys[0] : '';
+
+    // 監聽在 afterKey 之後的新訊息
+    const newMsgRef = afterKey
+      ? ref.orderByKey().startAfter(afterKey)
+      : ref.orderByKey().limitToLast(1);
+
+    newMsgRef.on('child_added', s=>{
+      if(initialKeys.has(s.key)) return; // 已在初始加載中渲染過，跳過
+      renderMsg(s.key, s.val());
+      db.ref(`msgs/${ch}/${s.key}/readBy`).on('value', rsnap=>{
+        const el=document.getElementById(`reads-${s.key}`);
+        if(!el) return;
+        const rb=rsnap.val()||{};
+        const readers=Object.values(rb).filter(r=>r.uid!==currentUser.uid);
+        if(!readers.length){ el.innerHTML='<span class="read-tick" style="opacity:.3">✓</span>'; return; }
+        el.innerHTML='<span class="read-tick">✓✓</span>'+
+          readers.map(r=>`<div class="read-av" data-nick="${esc(r.nick||'')}">${(r.nick||'?').charAt(0).toUpperCase()}</div>`).join('');
+      });
+    });
+  });
+
   ref.on('child_changed', s=> updateMsg(s.key, s.val()));
   
   ref.on('child_removed', s=>{
     const el=document.getElementById(`msg-${s.key}`);
     if(el){el.style.transition='all .25s';el.style.opacity='0';el.style.transform='scale(.95)';setTimeout(()=>el.remove(),250);}
-  });
-
-  // 當初始歷史紀錄全部抓取完畢後，強制將捲軸拉到最底
-  ref.once('value').then(() => {
-    setTimeout(scrollToBottom, 150);
-    setTimeout(scrollToBottom, 600);
   });
 }
 
@@ -5771,8 +5990,21 @@ const msgCont=document.getElementById('msg-container');
 function scrollToBottom(){ msgCont.scrollTop=msgCont.scrollHeight; }
 function autoScrollIfNeeded(){ if(msgCont.scrollHeight-msgCont.scrollTop-msgCont.clientHeight<180) scrollToBottom(); }
 msgCont.addEventListener('scroll',()=>{
-  document.getElementById('scroll-btn').classList.toggle('show', msgCont.scrollHeight-msgCont.scrollTop-msgCont.clientHeight>180);
+  const distFromBottom = msgCont.scrollHeight - msgCont.scrollTop - msgCont.clientHeight;
+  document.getElementById('scroll-btn').classList.toggle('show', distFromBottom > 180);
+  // 更新快速導航按鈕狀態
+  const navBottom = document.getElementById('nav-to-bottom');
+  if(navBottom) navBottom.style.display = distFromBottom > 180 ? 'flex' : 'none';
+  const navNew = document.getElementById('nav-new-msg');
+  if(navNew && distFromBottom < 100){
+    hasNewMsgsBelow = false;
+    navNew.style.display = 'none';
+  }
   markVisibleMsgsRead();
+  // 滾到頂部時自動觸發加載更多
+  if(msgCont.scrollTop < 80 && !isLoadingMore && !allMsgsLoaded){
+    loadMoreMessages();
+  }
 });
 
 // ============================================================
@@ -8211,8 +8443,7 @@ function showAdminSecurityModal(title, html){
 }
 
 </script>
-
-
+<script>applyBubbleColor();</script>
 
 
 </body>
