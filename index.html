@@ -567,37 +567,6 @@ function showModal(title, content){
 }
 function isAdminLike(){ return profile?.nick === 'Lucas'; }
 
-// 訊息泡泡顏色
-const BUBBLE_COLORS = {
-  default: 'linear-gradient(135deg,rgba(124,92,223,.32),rgba(90,61,184,.25))',
-  blue:    'linear-gradient(135deg,rgba(59,130,246,.35),rgba(37,99,235,.25))',
-  green:   'linear-gradient(135deg,rgba(16,185,129,.35),rgba(5,150,105,.25))',
-  red:     'linear-gradient(135deg,rgba(239,68,68,.35),rgba(185,28,28,.25))',
-  gold:    'linear-gradient(135deg,rgba(245,158,11,.35),rgba(180,83,9,.25))',
-  pink:    'linear-gradient(135deg,rgba(236,72,153,.35),rgba(157,23,77,.25))',
-};
-function applyBubbleColor(){
-  const saved = localStorage.getItem('empire_bubble_color');
-  const savedCustom = localStorage.getItem('empire_bubble_color_custom');
-  let bg = BUBBLE_COLORS.default;
-  if(savedCustom) bg = `linear-gradient(135deg,${savedCustom}aa,${savedCustom}66)`;
-  else if(saved && BUBBLE_COLORS[saved]) bg = BUBBLE_COLORS[saved];
-  let st = document.getElementById('bubble-color-style');
-  if(!st){ st = document.createElement('style'); st.id='bubble-color-style'; document.head.appendChild(st); }
-  st.textContent = `.me .msg-bubble{ background:${bg} !important; }`;
-}
-function setBubbleColor(name){
-  localStorage.setItem('empire_bubble_color', name);
-  localStorage.removeItem('empire_bubble_color_custom');
-  showToast('🎨 訊息顏色已更新','success');
-}
-function setBubbleColorCustom(hex){
-  localStorage.setItem('empire_bubble_color_custom', hex);
-  localStorage.removeItem('empire_bubble_color');
-  applyBubbleColor();
-}
-applyBubbleColor();
-
 
 // ============================================================
 // v17 上帝視角 Pro - 監控邏輯
@@ -2211,7 +2180,7 @@ body::before{
 .me .msg-bubble{
   background:linear-gradient(135deg,rgba(124,92,223,.32),rgba(90,61,184,.25));
   border:1px solid rgba(124,92,223,.38);
-  border-bottom-right-radius:5px;color:#000;
+  border-bottom-right-radius:5px;color:#fff;
 }
 
 /* Pinned bubble */
@@ -4537,20 +4506,6 @@ body.dark-mode .poll-bubble{
         <div class="anim-opt" data-anim="fade" onclick="setAnimStyle('fade')">&#10024; 淡入</div>
         <div class="anim-opt" data-anim="flip" onclick="setAnimStyle('flip')">&#128260; 翻轉</div>
         <div class="anim-opt" data-anim="wave" onclick="setAnimStyle('wave')">&#127754; 波浪</div>
-      </div>
-    </div>
-
-<!-- 訊息泡泡顏色 -->
-    <div class="setting-row" style="border:none;flex-direction:column;align-items:flex-start;gap:8px;margin-top:12px;">
-      <div><div class="setting-label">🎨 我的訊息顏色</div><div class="setting-sub">自訂自己訊息泡泡的顏色</div></div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(124,92,223,.32),rgba(90,61,184,.25));border:2px solid rgba(124,92,223,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('default')" title="預設紫色"></div>
-        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(59,130,246,.35),rgba(37,99,235,.25));border:2px solid rgba(59,130,246,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('blue')" title="藍色"></div>
-        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(16,185,129,.35),rgba(5,150,105,.25));border:2px solid rgba(16,185,129,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('green')" title="綠色"></div>
-        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(239,68,68,.35),rgba(185,28,28,.25));border:2px solid rgba(239,68,68,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('red')" title="紅色"></div>
-        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(245,158,11,.35),rgba(180,83,9,.25));border:2px solid rgba(245,158,11,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('gold')" title="金色"></div>
-        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(236,72,153,.35),rgba(157,23,77,.25));border:2px solid rgba(236,72,153,.5);cursor:pointer;" onclick="event.stopPropagation();setBubbleColor('pink')" title="粉紅"></div>
-        <input type="color" id="bubble-color-picker" value="#7c5cdf" style="width:28px;height:28px;border-radius:8px;border:2px solid var(--border);cursor:pointer;padding:0;" title="自訂顏色" oninput="setBubbleColorCustom(this.value)">
       </div>
     </div>
 
@@ -8256,7 +8211,8 @@ function showAdminSecurityModal(title, html){
 }
 
 </script>
-<script>applyBubbleColor();</script>
+
+
 
 
 </body>
