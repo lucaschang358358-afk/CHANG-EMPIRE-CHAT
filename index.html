@@ -4753,6 +4753,33 @@ body.dark-mode .poll-bubble{
   </div>
 </div>
 
+<!-- ============================
+     PENDING SCREEN (等待審核畫面)
+     ============================ -->
+<div id="pending-screen" class="modal-overlay" style="display:none; flex-direction:column; align-items:center; justify-content:center; background:var(--bg); z-index:9999;">
+  <div style="text-align:center; padding:40px; background:var(--glass); border-radius:20px; border:1px solid var(--gold); max-width:400px; box-shadow: 0 0 30px rgba(245,158,11,0.2);">
+    <div style="font-size:4rem; margin-bottom:20px;">⏳</div>
+    <h2 style="color:var(--gold); margin-bottom:10px; font-family: 'Syne', sans-serif;">入籍申請審核中</h2>
+    <p style="color:var(--text2); line-height:1.6;">大張帝國的守衛已收到你的申請。  
+請等待皇帝 <b>Lucas</b> 批准後即可進入。</p>
+    <button class="auth-btn" style="margin-top:30px; width:100%;" onclick="location.reload()">🚀 重新整理檢查狀態</button>
+    <button class="auth-btn" style="margin-top:10px; width:100%; background:transparent; border:1px solid var(--border);" onclick="doLogout()">🚪 登出帳號</button>
+  </div>
+</div>
+
+<style>
+  /* 讓等待畫面顯示的樣式 */
+  #pending-screen.show { 
+    display: flex !important; 
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+</style>
+
+
 <!-- FRAME EDITOR MODAL -->
 <div class="modal-overlay" id="frame-editor-modal">
   <div class="modal-card" style="width:440px;">
@@ -5101,13 +5128,26 @@ auth.onAuthStateChanged(async user=>{
   if (user) {
     currentUser = user;
 
-    // ★ 先確認是否在待審核名單（users 裡沒有資料代表還未批准）
+        // ★ 檢查用戶是否已被批准
     const userSnap = await db.ref(`users/${user.uid}`).once('value');
+    
     if (!userSnap.exists()) {
-      await initProfile(user, user.email.split('@')[0], user.email);
-      window.location.reload();
+      // 1. 隱藏登入介面，顯示「等待審核」畫面
+      document.getElementById('auth-screen').style.display = 'none';
+      const pendingScreen = document.getElementById('pending-screen');
+      if (pendingScreen) pendingScreen.classList.add('show');
+
+      // 2. 檢查是否已經提交過申請，如果沒有，就幫他提交到待審核名單
+      const pendSnap = await db.ref(`pendingRegistrations/${safeKey(user.uid)}`).once('value');
+      if (!pendSnap.exists()) {
+        // 這裡的暱稱預設用 Email 前綴，用戶之後批准進去可以再改
+        await submitPendingRegistration(user, user.email.split('@')[0]);
+      }
+      
+      // 3. 停止後續動作，讓他停在等待畫面
       return;
     }
+
     // ★ 正常登入
     profile = userSnap.val();
     if (!profile.nick) profile.nick = user.email.split('@')[0];
