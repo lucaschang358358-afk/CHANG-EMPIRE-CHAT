@@ -5059,12 +5059,14 @@ async function doAuth(){
   if (!email||!pw){ showAuthErr('請填寫電子郵件和密碼'); return; }
   btn.disabled=true; btn.textContent='處理中...';
   try {
-    if (authMode==='register') {
+       if (authMode==='register') {
       if (!nick.trim()){ showAuthErr('請輸入帝國聖號'); btn.disabled=false; btn.textContent='📋 建立帳號'; return; }
       const cred = await auth.createUserWithEmailAndPassword(email,pw);
-            await initProfile(cred.user, nick.trim(), email);
-
+      // 註冊後只提交申請，不建立正式資料
+      await submitPendingRegistration(cred.user, nick.trim());
+      showToast('📋 申請已提交，請等待皇帝批准', 'info');
     } else {
+
       await auth.signInWithEmailAndPassword(email,pw);
     }
   } catch(e) {
