@@ -5053,7 +5053,11 @@ function switchTab(mode) {
   document.getElementById('auth-submit-btn').textContent = mode==='login'?'🚀 進入帝國':'📋 建立帳號';
   document.getElementById('auth-err').classList.remove('show');
 }
-switchTab('login');
+
+// 等待 DOM 載入完畢後再執行，避免找不到元素當機
+document.addEventListener('DOMContentLoaded', () => {
+  switchTab('login');
+});
 
 function updateRegAvatar(){
   const v = document.getElementById('reg-nick').value;
