@@ -6,10 +6,10 @@
 <title>大張帝國 · 核心指揮中樞 v6.0</title>
 
 <!-- Firebase -->
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js">
 // ============================================================
 // v12 功能實作：在線統計、活躍榜、簽到歷史、訊息增強
+// ============================================================
 
 let userOnlineSeconds = 0;
 let onlineTimer = null;
@@ -137,6 +137,14 @@ async function openCheckinModal(){
   openModal('checkin-modal');
 }
 
+async function doCheckin(){
+  const today = new Date().toLocaleDateString('zh-TW').replace(/\//g,'-');
+  await db.ref(`checkins/${safeKey(currentUser.uid)}/${today}`).set(Date.now());
+  await db.ref(`users/${currentUser.uid}/points`).transaction(v=>(v||0)+100);
+  showToast('💰 簽到成功！獲得 100 積分', 'success');
+  openCheckinModal(); // 刷新介面
+  loadStats();
+}
 
 function viewCheckinHistory(){
   db.ref(`checkins/${safeKey(currentUser.uid)}`).once('value').then(snap=>{
@@ -602,6 +610,10 @@ async function updateMetrics(){
 }
 
 
+
+const _v17Send = window.sendMsg;
+window.sendMsg = function(){ msgTimestamps.push(Date.now()); return _v17Send.apply(this, arguments); };
+
 function updateLastSeenEverywhere(){
   document.querySelectorAll('.uname-row').forEach(async row => {
     const msgItem = row.closest('.msg-item');
@@ -715,6 +727,13 @@ async function awardXP(uid, amount){
   await userRef.update({ xp: newXP, level: newLevel });
 }
 
+// 發言時自動獎勵 XP
+const _v18Send = window.sendMsg;
+window.sendMsg = function(){
+  if(currentUser) awardXP(currentUser.uid, 10);
+  return _v18Send.apply(this, arguments);
+};
+
 // ============================================================
 // 24. 經驗倍率活動
 // ============================================================
@@ -725,36 +744,26 @@ async function setXPMultiplier(multiplier, durationMinutes){
   showToast(`⭐ XP 倍率已設為 ${multiplier}x (${durationMinutes} 分鐘)`, 'success');
 }
 
+// ============================================================
+// 27. 積分商城
+// ============================================================
+const SHOP_ITEMS = [
+  { id: 'color-red', name: '紅色昵稱', price: 100, icon: '🔴' },
+  { id: 'color-gold', name: '金色昵稱', price: 150, icon: '🟡' },
+  { id: 'halo-gold', name: '金色光環', price: 200, icon: '✨' },
+  { id: 'halo-rainbow', name: '彩虹光環', price: 300, icon: '🌈' },
+  { id: 'bubble-custom', name: '自訂氣泡', price: 50, icon: '💬' },
+  { id: 'badge-vip', name: 'VIP 徽章', price: 500, icon: '👑' },
+];
 
 async function buyShopItem(itemId){
-
-    const item = SHOP_ITEMS.find(i => i.id === itemId);
-
-    if(!item){
-        showToast("找不到商品","error");
-        return;
-    }
-
-    const user = await db.ref(`users/${currentUser.uid}`)
-        .once("value")
-        .then(s=>s.val());
-
-    const points = user.points || 0;
-
-    const price = item.cost ?? item.price ?? 0;
-
-    if(points < price){
-        showToast("💰 積分不足","warn");
-        return;
-    }
-
-    await db.ref(`users/${currentUser.uid}/points`)
-        .set(points - price);
-
-    await db.ref(`users/${currentUser.uid}/inventory/${item.id}`)
-        .set(true);
-
-    showToast(`✅ 已購買 ${item.icon} ${item.name}`,"success");
+  const item = SHOP_ITEMS.find(i => i.id === itemId);
+  if(!item) return;
+  const user = await db.ref(`users/${currentUser.uid}`).once('value').then(s => s.val());
+  if((user.points || 0) < item.price){ showToast('💰 積分不足','warn'); return; }
+  await db.ref(`users/${currentUser.uid}`).update({ points: (user.points || 0) - item.price });
+  await db.ref(`users/${currentUser.uid}/inventory`).child(itemId).set(true);
+  showToast(`✅ 購買成功：${item.name}`, 'success');
 }
 
 // ============================================================
@@ -834,48 +843,29 @@ function handleSlashCommand(text){
 }
 
 // Hook sendMsg 來處理斜槓指令
-const _originalSendMsg = window.sendMsg;
-
-window.sendMsg = function () {
-
-    // v17：訊息統計
-    msgTimestamps.push(Date.now());
-
-    // v18：XP
-    if (currentUser) {
-        awardXP(currentUser.uid, 10);
-    }
-
-    // Slash Command
-    const input = document.getElementById("msg-input");
-    if (input) {
-        const cmdResult = handleSlashCommand(input.value);
-        if (cmdResult) {
-            input.value = cmdResult;
-        }
-    }
-
-    return _originalSendMsg.apply(this, arguments);
+const _v18SlashSend = window.sendMsg;
+window.sendMsg = function(){
+  const input = document.getElementById('msg-input');
+  const text = input.value;
+  const cmdResult = handleSlashCommand(text);
+  if(cmdResult){
+    input.value = cmdResult;
+  }
+  return _v18SlashSend.apply(this, arguments);
 };
 
 // ============================================================
 // 48. 主題引擎
 // ============================================================
+function setTheme(theme){
+  document.documentElement.className = `theme-${theme}`;
+  localStorage.setItem('userTheme', theme);
+  v18.userTheme = theme;
+}
+
 function loadTheme(){
-    const saved =
-        localStorage.getItem("empire_theme") ||
-        localStorage.getItem("userTheme") ||
-        "light";
-
-    setTheme(saved);
-
-    // 相容舊版本
-    localStorage.setItem("empire_theme", saved);
-    localStorage.setItem("userTheme", saved);
-
-    if(window.v18){
-        v18.userTheme = saved;
-    }
+  const saved = localStorage.getItem('userTheme') || 'dark';
+  setTheme(saved);
 }
 
 // ============================================================
@@ -5053,11 +5043,7 @@ function switchTab(mode) {
   document.getElementById('auth-submit-btn').textContent = mode==='login'?'🚀 進入帝國':'📋 建立帳號';
   document.getElementById('auth-err').classList.remove('show');
 }
-
-// 等待 DOM 載入完畢後再執行，避免找不到元素當機
-document.addEventListener('DOMContentLoaded', () => {
-  switchTab('login');
-});
+switchTab('login');
 
 function updateRegAvatar(){
   const v = document.getElementById('reg-nick').value;
@@ -5850,7 +5836,20 @@ function togglePinned(){
 // ============================================================
 // IMAGE UPLOAD
 // ============================================================
-
+function uploadImg(el){
+  const file=el.files[0]; if(!file) return;
+  const time=new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'});
+  const date=new Date().toLocaleDateString('zh-TW');
+  const lk=db.ref(`msgs/${currentChannel}`).push({uid:currentUser.uid,user:profile.nick||'',text:'⚡ 正在上傳圖片...',type:'text',time,date,reactions:{}}).key;
+  showToast('⚡ 上傳中...','warn');
+  const fd=new FormData(); fd.append('image',file);
+  fetch('https://api.imgur.com/3/image',{method:'POST',headers:{Authorization:'Client-ID cbf916fa42a170a'},body:fd})
+    .then(r=>r.json()).then(j=>{
+      if(j.success){ db.ref(`msgs/${currentChannel}/${lk}`).set({uid:currentUser.uid,user:profile.nick||'',text:j.data.link,type:'image',time,date,reactions:{},avatarUrl:profile.avatarUrl||''}); showToast('✅ 圖片上傳成功','success'); }
+      else { db.ref(`msgs/${currentChannel}/${lk}`).set({uid:currentUser.uid,user:profile.nick||'',text:'❌ 上傳失敗',type:'text',time,date,reactions:{}}); showToast('❌ 圖片上傳失敗','error'); }
+    }).catch(()=>{ db.ref(`msgs/${currentChannel}/${lk}`).update({text:'❌ 連線失敗'}); showToast('❌ 連線失敗','error'); });
+  el.value='';
+}
 
 // Paste image
 function handlePaste(e){
@@ -6433,6 +6432,29 @@ async function refreshCheckinUI(){
   }
 }
 
+async function doCheckin(){
+  if(!currentUser) return;
+  const snap = await db.ref(`users/${currentUser.uid}`).once('value');
+  const data = snap.val()||{};
+  const todayStr = new Date().toLocaleDateString('zh-TW');
+  if(data.lastCheckinDate === todayStr){ showToast('✅ 今日已簽到','warn'); return; }
+
+  const lastDate = data.lastCheckinDate||'';
+  const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
+  const yesterdayStr = yesterday.toLocaleDateString('zh-TW');
+  const streak = (lastDate===yesterdayStr) ? (data.streak||0)+1 : 1;
+  const reward = CHECKIN_REWARDS[Math.min(streak-1,6)];
+  const pts = (data.points||0)+reward;
+
+  await db.ref(`users/${currentUser.uid}`).update({lastCheckinDate:todayStr,streak,points:pts});
+  // Also update presence for leaderboard
+  db.ref(`presence/${safeKey(currentUser.uid)}`).update({points:pts,streak});
+
+  playScreenEffect('empire');
+  showToast(`🎁 簽到成功！+${reward} 積分 · 連續 ${streak} 天`,'success');
+  await refreshCheckinUI();
+  updateCheckinSidebarBtn(true);
+}
 
 async function updateCheckinSidebarBtn(done){
   const btn = document.getElementById('checkin-sidebar-btn');
@@ -7239,6 +7261,21 @@ function initKeyboardShortcuts(){
   });
 }
 
+// ============================================================
+// 黑名單系統 — 封鎖偵測
+// ============================================================
+async function checkIfBanned(uid){
+  db.ref(`blacklist/${safeKey(uid)}`).on('value', snap=>{
+    if(snap.exists() && snap.val()===true){
+      document.getElementById('blocked-screen').classList.add('show');
+      // disable all input
+      const inp=document.getElementById('msgInput');
+      if(inp){ inp.disabled=true; inp.placeholder='你已被封鎖，無法發言'; }
+    } else {
+      document.getElementById('blocked-screen').classList.remove('show');
+    }
+  });
+}
 
 // ============================================================
 // 好友系統
@@ -7547,6 +7584,54 @@ function sendDm(){
 
 function handleDmKey(e){ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sendDm(); } }
 
+// ============================================================
+// 管理員面板 (Lucas + Johnnie only)
+// ============================================================
+async function openAdminPanel(){
+  openModal('admin-panel-modal');
+  const snap=await db.ref('users').once('value');
+  const all=snap.val()||{};
+  const banSnap=await db.ref('blacklist').once('value');
+  const banned=banSnap.val()||{};
+
+  const userList=document.getElementById('admin-user-list');
+  const banList=document.getElementById('admin-ban-list');
+  userList.innerHTML=''; banList.innerHTML='';
+
+  Object.entries(all).forEach(([uid,u])=>{
+    const isBanned=!!banned[safeKey(uid)];
+    const row=document.createElement('div'); row.className='admin-user-row';
+    const letter=(u.nick||'?').charAt(0).toUpperCase();
+    const et=getEmpireTitle(u.nick||'');
+    row.innerHTML=`
+      <div class="admin-user-av" style="background:${u.avatarUrl?`url(${u.avatarUrl}) center/cover`:'linear-gradient(135deg,var(--purple),#4f46e5)'}">${u.avatarUrl?'':letter}</div>
+      <div class="admin-user-info">
+        <div class="admin-user-name">${esc(u.nick||'?')}${et?` <span style="font-size:.6rem;color:${et.color};">${et.title}</span>`:''}</div>
+        <div class="admin-user-meta">${u.msgCount||0} 則 · ${u.points||0} 積分${isBanned?' · <span style="color:var(--red);">已封鎖</span>':''}</div>
+      </div>
+      <div class="admin-actions">
+        ${!isBanned?`<button class="adm-btn ban" onclick="adminBan('${uid}','${esc(u.nick||'')}')">🚫 封鎖</button>`
+                   :`<button class="adm-btn unban" onclick="adminUnban('${uid}','${esc(u.nick||'')}')">✅ 解封</button>`}
+        <button class="adm-btn kick" onclick="adminWarn('${uid}','${esc(u.nick||'')}')">⚠️ 警告</button>
+      </div>`;
+    userList.appendChild(row);
+  });
+
+  // Banned list
+  const bannedUids=Object.keys(banned).filter(k=>banned[k]===true);
+  if(!bannedUids.length){ banList.innerHTML='<div style="color:var(--text3);font-size:.78rem;font-family:\'JetBrains Mono\',monospace;text-align:center;padding:16px;">無封鎖成員</div>'; }
+  else {
+    bannedUids.forEach(buid=>{
+      const u=all[buid]||{};
+      const row=document.createElement('div'); row.className='admin-user-row';
+      const letter=(u.nick||buid).charAt(0).toUpperCase();
+      row.innerHTML=`<div class="admin-user-av" style="background:linear-gradient(135deg,#6b7280,#4b5563)">${letter}</div>
+        <div class="admin-user-info"><div class="admin-user-name" style="color:var(--text3)">${esc(u.nick||buid)}</div></div>
+        <div class="admin-actions"><button class="adm-btn unban" onclick="adminUnban('${buid}','${esc(u.nick||buid)}')">✅ 解封</button></div>`;
+      banList.appendChild(row);
+    });
+  }
+}
 
 async function adminBan(uid, nick){
   if(!confirm(`確定要封鎖 ${nick}？他將無法看到聊天室。`)) return;
@@ -7735,52 +7820,107 @@ function renderAdminUsers(){
     list.appendChild(row);
   });
 }
-// 獨立的帝國安全中心面板渲染函數
+function renderAdminBanMuteList(mutedCount=0){
 function renderSecurityPanel(){
+
   let panel = document.getElementById('empire-security-panel');
+
   if(!panel){
+
     panel = document.createElement('div');
+
     panel.id = 'empire-security-panel';
+
     panel.className = 'admin-security-panel';
-    const container = document.getElementById('admin-panel-modal');
+
+    const container =
+      document.getElementById('admin-panel-modal');
+
     if(container){
+
       container.appendChild(panel);
     }
   }
-  const guestCount = Object.keys(securityCache.guestUsers || {}).length;
-  const spamCount = Object.keys(securityCache.spamUsers || {}).length;
-  const dupCount = Object.values(securityCache.duplicateDevices || {}).filter(v=>v.length > 1).length;
+
+  const guestCount =
+    Object.keys(securityCache.guestUsers || {}).length;
+
+  const spamCount =
+    Object.keys(securityCache.spamUsers || {}).length;
+
+  const dupCount =
+    Object.values(securityCache.duplicateDevices || {})
+      .filter(v=>v.length > 1).length;
 
   panel.innerHTML = `
-    <div class="admin-section-title" style="margin-top:20px; margin-bottom:15px;">
+
+    <div class="admin-section-title"
+      style="
+        margin-top:20px;
+        margin-bottom:15px;
+      ">
+
       🛡️ 帝國安全中心
+
     </div>
-    <div style="display:flex; gap:10px; flex-wrap:wrap;">
-      <button class="adm-btn role" onclick="adminViewDuplicateDevices()">📱 多設備 (${dupCount})</button>
-      <button class="adm-btn mute" onclick="adminViewGuests()">👤 Guest (${guestCount})</button>
-      <button class="adm-btn ban" onclick="adminViewSpamUsers()">🚨 Spam (${spamCount})</button>
-      <button class="adm-btn kick" onclick="adminKickAllGuests()">👢 清除 Guest</button>
-      <button class="adm-btn role" onclick="adminRealtimeStats()">📊 安全統計</button>
+
+    <div style="
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+    ">
+
+      <button class="adm-btn role"
+        onclick="adminViewDuplicateDevices()">
+
+        📱 多設備 (${dupCount})
+
+      </button>
+
+      <button class="adm-btn mute"
+        onclick="adminViewGuests()">
+
+        👤 Guest (${guestCount})
+
+      </button>
+
+      <button class="adm-btn ban"
+        onclick="adminViewSpamUsers()">
+
+        🚨 Spam (${spamCount})
+
+      </button>
+
+      <button class="adm-btn kick"
+        onclick="adminKickAllGuests()">
+
+        👢 清除 Guest
+
+      </button>
+
+      <button class="adm-btn role"
+        onclick="adminRealtimeStats()">
+
+        📊 安全統計
+
+      </button>
+
     </div>
   `;
 }
-
-// 獨立的封鎖與禁言名單渲染函數
-function renderAdminBanMuteList(mutedCount=0){
   const el=document.getElementById('admin-ban-list'); if(!el) return;
   const banned=Object.keys(adminCache.banned||{}).filter(k=>adminCache.banned[k]===true);
   const muted=Object.keys(adminCache.muted||{}).filter(k=>adminCache.muted[k]===true);
   if(!banned.length && !muted.length){ el.innerHTML='<div class="admin-note" style="text-align:center;padding:16px;">目前沒有封鎖或禁言成員。</div>'; return; }
-  el.innerHTML=\`<div class="admin-note">封鎖 \${banned.length} 人 · 禁言 \${mutedCount||muted.length} 人</div>\`;
+  el.innerHTML=`<div class="admin-note">封鎖 ${banned.length} 人 · 禁言 ${mutedCount||muted.length} 人</div>`;
   [...new Set([...banned,...muted])].forEach(k=>{
     const entry=Object.entries(adminCache.users||{}).find(([uid])=>safeKey(uid)===k);
     const uid=entry?.[0]||k; const u=entry?.[1]||{}; const nick=u.nick||k;
     const row=document.createElement('div'); row.className='admin-user-row';
-    row.innerHTML=\`<div class="admin-user-av" style="background:linear-gradient(135deg,#6b7280,#4b5563)">\${esc(nick).charAt(0).toUpperCase()}</div><div class="admin-user-info"><div class="admin-user-name">\${esc(nick)}</div><div class="admin-user-meta">\${adminCache.banned[k]?'已封鎖 ':''}\${adminCache.muted[k]?'已禁言':''}</div></div><div class="admin-actions">\${adminCache.banned[k]?\`<button class="adm-btn unban" onclick="adminUnban('\${uid}','\${esc(nick)}')">解封</button>\`:\`\`}\${adminCache.muted[k]?\`<button class="adm-btn mute" onclick="adminToggleMute('\${uid}','\${esc(nick)}',false)">解除禁言</button>\`:\`\`}</div>\`;
+    row.innerHTML=`<div class="admin-user-av" style="background:linear-gradient(135deg,#6b7280,#4b5563)">${esc(nick).charAt(0).toUpperCase()}</div><div class="admin-user-info"><div class="admin-user-name">${esc(nick)}</div><div class="admin-user-meta">${adminCache.banned[k]?'已封鎖 ':''}${adminCache.muted[k]?'已禁言':''}</div></div><div class="admin-actions">${adminCache.banned[k]?`<button class="adm-btn unban" onclick="adminUnban('${uid}','${esc(nick)}')">解封</button>`:''}${adminCache.muted[k]?`<button class="adm-btn mute" onclick="adminToggleMute('${uid}','${esc(nick)}',false)">解除禁言</button>`:''}</div>`;
     el.appendChild(row);
   });
 }
-
 async function openAdminPanel(){
   if(!isAdminLike()){ showToast('🚫 權限不足：只有管理員/版主可開啟上帝視角','error'); return; }
   openModal('admin-panel-modal');
@@ -7890,14 +8030,12 @@ async function detectSpamUsers(){
     Object.entries(counter).forEach(([uid,count])=>{
 
       if(count >= 15){
+
         securityCache.spamUsers[uid] = count;
       }
     });
   }
 }
-
-// 獨立的管理員日誌渲染函數
-function renderAdminLogs(results){
   const list=document.getElementById('admin-log-list');
   if(!results.length){ list.innerHTML='<div class="admin-note" style="text-align:center;padding:18px;">找不到發言紀錄。</div>'; return; }
   list.innerHTML='';
