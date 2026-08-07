@@ -3,10 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>大張帝國 · 核心指揮中樞 v6.0</title>
+<title>大張帝國 · 核心指揮中樞 v21</title>
 
-<!-- Firebase -->
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js">
+<!-- Firebase SDKs - 正確載入順序 -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800;900&family=JetBrains+Mono:wght@400;700&family=Noto+Serif+TC:wght@400;700&display=swap" rel="stylesheet">
+
+<!-- Early feature patches (v12 ~ v20) - now in proper script block -->
+<script>
 // ============================================================
 // v12 功能實作：在線統計、活躍榜、簽到歷史、訊息增強
 // ============================================================
@@ -1863,12 +1871,6 @@ window.initApp = function(){
 if(typeof currentUser !== 'undefined') initGatekeeper();
 
 </script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-
-<!-- Fonts -->
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800;900&family=JetBrains+Mono:wght@400;700&family=Noto+Serif+TC:wght@400;700&display=swap" rel="stylesheet">
-
 <style>
 /* ============================================================
    ROOT TOKENS
@@ -4312,7 +4314,8 @@ body.dark-mode .poll-bubble{
 
     <div class="sb-footer">
       <button class="checkin-btn" id="checkin-sidebar-btn" onclick="openCheckin()">🎁 每日簽到</button>
-      <button class="auth-btn" id="admin-panel-btn" style="display:none;margin-top:6px;padding:10px;font-size:.78rem;background:linear-gradient(135deg,#dc2626,#991b1b);" onclick="openAdminPanel()">🛡️ 管理員面板</button>
+      <button type="button" class="sb-more-btn" id="btn-feature-hub" onclick="window.openFeatureHub && window.openFeatureHub()">✨ 功能中心</button>
+      <button type="button" class="auth-btn" id="admin-panel-btn" style="display:none;margin-top:4px;padding:11px;font-size:.8rem;font-weight:800;background:linear-gradient(135deg,#dc2626,#991b1b);border:1px solid rgba(255,100,100,0.4);color:#fff;" onclick="window.openAdminPanel && window.openAdminPanel()">🛡️ 管理員面板</button>
       <button class="logout-btn" onclick="doLogout()">🚪 登出帝國</button>
     </div>
   </div>
@@ -5917,7 +5920,7 @@ function openProfileModal(){
   if(typeof loadAnimStyle==='function') loadAnimStyle();
 }
 
-function closeModal(id){ document.getElementById(id).classList.remove('open'); }
+function closeModal(id){ const el=document.getElementById(id); if(el) el.classList.remove('open'); }
 
 function saveNick(){
   const nick=document.getElementById('edit-nick').value.trim();
@@ -6480,7 +6483,14 @@ async function checkTodayCheckin(){
 // 排行榜
 // ============================================================
 let lbMode = 'msgs';
-function openModal(id){ document.getElementById(id).classList.add('open'); if(id==='leaderboard-modal') loadLeaderboard(); if(id==='member-search-modal') loadMemberSearch(); if(id==='feature-center-modal') switchFeatureCenterTab({target:{classList:{add:()=>{},remove:()=>{}}}},'overview'); }
+function openModal(id){
+  const el = document.getElementById(id);
+  if(!el){ console.error('Modal not found:', id); if(typeof showToast==='function') showToast('無法開啟面板：'+id,'error'); return; }
+  el.classList.add('open');
+  if(id==='leaderboard-modal' && typeof loadLeaderboard==='function') loadLeaderboard();
+  if(id==='member-search-modal' && typeof loadMemberSearch==='function') loadMemberSearch();
+  if(id==='feature-center-modal' && typeof switchFeatureCenterTab==='function') try{ switchFeatureCenterTab({target:{classList:{add:()=>{},remove:()=>{}}}},'overview'); }catch(e){}
+}
 
 function switchLbTab(mode){
   lbMode=mode;
@@ -8666,6 +8676,4198 @@ async function uploadImg(el) {
 </script>
 <script>applyBubbleColor();</script>
 
+
+
+
+<script>
+// ============================================================
+// v21.1 好友系統強化 + 關鍵修復
+// ============================================================
+
+// --- 好友備註 (local + cloud) ---
+function getFriendNotes() {
+  try { return JSON.parse(localStorage.getItem('empire_friend_notes') || '{}'); }
+  catch(e) { return {}; }
+}
+function saveFriendNote(uid, note) {
+  const notes = getFriendNotes();
+  if (note && note.trim()) notes[uid] = note.trim().substring(0, 40);
+  else delete notes[uid];
+  localStorage.setItem('empire_friend_notes', JSON.stringify(notes));
+  // 同步到 Firebase（可選）
+  if (currentUser) {
+    db.ref(`friendNotes/${safeKey(currentUser.uid)}/${safeKey(uid)}`).set(note || null);
+  }
+  showToast(note ? '📝 備註已儲存' : '備註已清除', 'success');
+}
+
+// --- 強化版好友側邊欄渲染（在線優先 + 備註 + 最後上線） ---
+const _v21OrigRenderFriends = window.renderFriendsSidebar;
+window.renderFriendsSidebar = async function(friends) {
+  const list = document.getElementById('friends-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const entries = Object.values(friends || {});
+  if (!entries.length) {
+    list.innerHTML = '<div style="color:var(--text3);font-size:.7rem;padding:4px 12px;font-family:\'JetBrains Mono\',monospace;">暫無好友</div>';
+    return;
+  }
+
+  const presSnap = await db.ref('presence').once('value');
+  const presence = presSnap.val() || {};
+  const byUid = {};
+  Object.values(presence).forEach(p => { if (p && p.uid) byUid[p.uid] = p; });
+  const notes = getFriendNotes();
+
+  // 在線優先排序
+  entries.sort((a, b) => {
+    const aOnline = byUid[a.uid] ? 0 : 1;
+    const bOnline = byUid[b.uid] ? 0 : 1;
+    return aOnline - bOnline || (a.nick || '').localeCompare(b.nick || '');
+  });
+
+  entries.slice(0, 15).forEach(f => {
+    const pres = byUid[f.uid] || null;
+    const st = pres ? (pres.myStatus || 'online') : 'offline';
+    const note = notes[f.uid] || '';
+    const letter = (f.nick || '?').charAt(0).toUpperCase();
+    const title = (pres && pres.customTitle) || (typeof getEmpireTitle === 'function' && getEmpireTitle(f.nick || '')?.title) || '帝國臣民';
+    const statusLabel = ({online:'🟢 在線', away:'🟡 離開', busy:'🔴 忙碌', offline:'⚫ 離線'})[st] || '⚫ 離線';
+    
+    let lastSeenStr = '';
+    if (!pres && f.uid) {
+      // 嘗試從 presence 的 lastSeen（可能 key 不同）
+      lastSeenStr = '離線';
+    } else if (pres && pres.lastSeen) {
+      const diff = Math.floor((Date.now() - pres.lastSeen) / 60000);
+      lastSeenStr = diff < 1 ? '剛才' : diff < 60 ? diff + '分鐘前' : Math.floor(diff/60) + '小時前';
+    }
+
+    const div = document.createElement('div');
+    div.className = 'friend-item';
+    div.innerHTML = `
+      <div class="fi-av" style="background:linear-gradient(135deg,var(--purple),#4f46e5);">
+        ${letter}<div class="fi-dot ${st === 'online' || st === 'away' || st === 'busy' ? st : 'offline'}"></div>
+      </div>
+      <div class="fi-info">
+        <div class="fi-name">${esc(f.nick || '?')}${note ? ` <span style="font-size:.65rem;color:var(--text3);">(${esc(note)})</span>` : ''}</div>
+        <div class="fi-status">${statusLabel} · ${esc(title)}</div>
+      </div>
+      <div class="fi-actions">
+        <button class="fi-btn" title="傳送私訊" onclick="openDmWindow('${f.uid}','${esc(f.nick || '')}','')">💬</button>
+        <button class="fi-btn" title="編輯備註" onclick="editFriendNote('${f.uid}','${esc(f.nick || '')}')">📝</button>
+        <button class="fi-btn danger" title="移除好友" onclick="removeFriend('${f.uid}','${esc(f.nick || '')}')">✕</button>
+      </div>`;
+    list.appendChild(div);
+  });
+};
+
+function editFriendNote(uid, nick) {
+  const current = getFriendNotes()[uid] || '';
+  const note = prompt(`為「${nick}」設定備註（最多40字，空白則清除）：`, current);
+  if (note === null) return;
+  saveFriendNote(uid, note);
+  // 刷新側邊欄
+  if (currentUser) {
+    db.ref(`friends/${safeKey(currentUser.uid)}`).once('value').then(snap => {
+      if (typeof renderFriendsSidebar === 'function') renderFriendsSidebar(snap.val() || {});
+    });
+  }
+}
+
+// --- 強化 loadFriendsTab：好友列表顯示在線狀態與備註 ---
+const _v21OrigLoadFriendsTab = window.loadFriendsTab;
+window.loadFriendsTab = async function(tab) {
+  await _v21OrigLoadFriendsTab.apply(this, arguments);
+  
+  if (tab === 'friends') {
+    const panel = document.getElementById('fr-panel');
+    if (!panel) return;
+    
+    // 在現有列表上補強狀態
+    const presSnap = await db.ref('presence').once('value');
+    const presence = presSnap.val() || {};
+    const byUid = {};
+    Object.values(presence).forEach(p => { if (p && p.uid) byUid[p.uid] = p; });
+    const notes = getFriendNotes();
+    
+    panel.querySelectorAll('.fr-row').forEach(row => {
+      const btn = row.querySelector('button[onclick*="openDmWindow"]');
+      const m = (btn?.getAttribute('onclick') || '').match(/openDmWindow\\('([^']+)'/);
+      if (!m) return;
+      const uid = m[1];
+      const pres = byUid[uid];
+      const st = pres ? (pres.myStatus || 'online') : 'offline';
+      const statusLabel = ({online:'🟢 在線', away:'🟡 離開', busy:'🔴 忙碌', offline:'⚫ 離線'})[st] || '⚫ 離線';
+      const sub = row.querySelector('.fr-sub');
+      if (sub) {
+        const note = notes[uid];
+        sub.textContent = statusLabel + (note ? ` · 備註：${note}` : '');
+      }
+      // 加備註按鈕
+      if (!row.querySelector('.fr-note-btn')) {
+        const noteBtn = document.createElement('button');
+        noteBtn.className = 'fr-act-btn';
+        noteBtn.textContent = '📝';
+        noteBtn.title = '編輯備註';
+        noteBtn.onclick = () => {
+          const nameEl = row.querySelector('.fr-name');
+          editFriendNote(uid, nameEl ? nameEl.textContent : '');
+        };
+        const actions = row.querySelector('.fr-act-btn')?.parentElement || row;
+        actions.appendChild(noteBtn);
+      }
+    });
+  }
+};
+
+// --- 好友請求接受時可選寫備註 ---
+const _v21OrigAccept = window.acceptFriendRequest;
+window.acceptFriendRequest = async function(fromUid, fromNick) {
+  await _v21OrigAccept.apply(this, arguments);
+  setTimeout(() => {
+    if (confirm(`已成為好友！要為「${fromNick}」設定備註嗎？`)) {
+      editFriendNote(fromUid, fromNick);
+    }
+  }, 400);
+};
+
+// --- 簡單互為好友檢查（用於顯示） ---
+async function isMutualFriend(uid) {
+  if (!currentUser) return false;
+  const snap = await db.ref(`friends/${safeKey(uid)}/${safeKey(currentUser.uid)}`).once('value');
+  return snap.exists();
+}
+
+// --- 修復：確保好友請求監聽在登入後啟動 ---
+const _v21FriendInit = setInterval(() => {
+  if (typeof currentUser !== 'undefined' && currentUser) {
+    clearInterval(_v21FriendInit);
+    if (typeof listenFriendRequests === 'function') listenFriendRequests();
+    if (typeof listenFriendsList === 'function') listenFriendsList();
+    console.log('✅ v21.1 好友系統強化已載入');
+  }
+}, 800);
+
+// --- 其他小修復 ---
+// 防止重複定義造成的錯誤
+if (typeof window.showToast !== 'function') {
+  window.showToast = function(msg, type) {
+    console.log(`[Toast ${type||'info'}]`, msg);
+    // 簡易 fallback
+    const t = document.createElement('div');
+    t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e1b28;color:#fff;padding:12px 20px;border-radius:12px;z-index:99999;font-size:0.9rem;box-shadow:0 8px 24px rgba(0,0,0,.4);';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2800);
+  };
+}
+</script>
+
+
+<script>
+// ============================================================
+// v22.0 功能大禮包
+// 重要推播中心 / 群組 / 好友動態·分組·生日 / 語音訊息
+// 已讀回執 / 自訂狀態過期 / 帝國日報 / 表情統計 / 頻道權限
+// ============================================================
+
+// -------------------- 1. 重要推播中心 --------------------
+window.openBroadcastHub = function openBroadcastHub(){
+  openModal('broadcast-hub-modal');
+  const compose = document.getElementById('broadcast-compose');
+  if (compose) compose.style.display = (profile?.nick === 'Lucas' || (typeof isAdminLike === 'function' && isAdminLike())) ? 'block' : 'none';
+  loadBroadcasts();
+}
+
+window.publishBroadcast = async function publishBroadcast(){
+  if (!(profile?.nick === 'Lucas' || (typeof isAdminLike === 'function' && isAdminLike()))) {
+    showToast('⚠️ 只有管理員可發布推播','warn'); return;
+  }
+  const title = (document.getElementById('bc-title')?.value || '').trim();
+  const body  = (document.getElementById('bc-body')?.value || '').trim();
+  const level = document.getElementById('bc-level')?.value || 'info';
+  const pin   = !!document.getElementById('bc-pin')?.checked;
+  if (!title || !body) { showToast('請填寫標題與內容','warn'); return; }
+  await db.ref('broadcasts').push({
+    title, body, level, pin,
+    by: profile.nick || '管理員',
+    ts: Date.now()
+  });
+  // 同步到舊的 announce 系統（相容）
+  if (pin) {
+    await db.ref('announce').set({ text: `【${title}】${body}`, by: profile.nick || '', ts: Date.now(), level });
+  }
+  document.getElementById('bc-title').value = '';
+  document.getElementById('bc-body').value = '';
+  showToast('📢 推播已發布','success');
+  loadBroadcasts();
+}
+
+window.loadBroadcasts = async function loadBroadcasts(){
+  const el = document.getElementById('broadcast-list');
+  if (!el) return;
+  const snap = await db.ref('broadcasts').limitToLast(30).once('value');
+  const data = snap.val() || {};
+  const list = Object.entries(data).map(([k,v]) => ({key:k, ...v})).sort((a,b)=> (b.ts||0)-(a.ts||0));
+  if (!list.length) {
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3);">尚無推播</div>';
+    return;
+  }
+  const levelIcon = {info:'ℹ️', important:'⚠️', urgent:'🚨'};
+  const levelColor = {info:'var(--text2)', important:'#f59e0b', urgent:'#ef4444'};
+  el.innerHTML = list.map(b => `
+    <div style="padding:14px;margin-bottom:10px;border-radius:14px;border:1px solid var(--border);background:var(--bg2);border-left:4px solid ${levelColor[b.level]||'var(--purple)'};">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <strong style="color:${levelColor[b.level]}">${levelIcon[b.level]||'ℹ️'} ${esc(b.title||'')}</strong>
+        <span style="font-size:0.7rem;color:var(--text3);font-family:'JetBrains Mono',monospace;">${b.ts ? new Date(b.ts).toLocaleString('zh-TW') : ''}</span>
+      </div>
+      <div style="font-size:0.88rem;line-height:1.6;margin-bottom:6px;">${esc(b.body||'')}</div>
+      <div style="font-size:0.72rem;color:var(--text3);">由 ${esc(b.by||'')} 發布 ${b.pin ? '· 📌 置頂' : ''}</div>
+      ${(profile?.nick==='Lucas') ? `<button onclick="deleteBroadcast('${b.key}')" style="margin-top:8px;font-size:0.75rem;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#ef4444;padding:4px 10px;border-radius:8px;cursor:pointer;">刪除</button>` : ''}
+    </div>
+  `).join('');
+}
+
+window.deleteBroadcast = async function deleteBroadcast(key){
+  if (!confirm('確定刪除此推播？')) return;
+  await db.ref(`broadcasts/${key}`).remove();
+  showToast('已刪除','warn');
+  loadBroadcasts();
+}
+
+// 監聽最新緊急推播 → Toast
+function listenBroadcasts(){
+  if (!currentUser) return;
+  let first = true;
+  db.ref('broadcasts').limitToLast(1).on('child_added', snap => {
+    if (first) { first = false; return; }
+    const b = snap.val();
+    if (!b) return;
+    const icon = {info:'ℹ️', important:'⚠️', urgent:'🚨'}[b.level] || '📢';
+    showToast(`${icon} ${b.title}: ${(b.body||'').substring(0,40)}`, b.level==='urgent'?'error':'info');
+  });
+}
+
+// -------------------- 2. 群組聊天（小圈子） --------------------
+window.loadGroupList = async function loadGroupList(){
+  const el = document.getElementById('group-list');
+  if (!el || !currentUser) return;
+  const snap = await db.ref('groups').once('value');
+  const all = snap.val() || {};
+  const myGroups = Object.entries(all).filter(([,g]) => g.members && g.members[safeKey(currentUser.uid)]);
+  if (!myGroups.length) {
+    el.innerHTML = '<div style="text-align:center;color:var(--text3);padding:24px;">你還沒有加入任何群組</div>';
+    return;
+  }
+  el.innerHTML = myGroups.map(([id,g]) => {
+    const memberCount = Object.keys(g.members||{}).length;
+    return `<div class="fr-row" style="cursor:pointer;" onclick="enterGroup('${id}','${esc(g.name||'')}')">
+      <div class="fr-av" style="background:linear-gradient(135deg,#0d9488,#0f766e)">👥</div>
+      <div class="fr-info"><div class="fr-name">${esc(g.name||'未命名')}</div><div class="fr-sub">${memberCount} 位成員 · ${esc(g.ownerNick||'')}</div></div>
+      <button class="fr-act-btn msg">進入</button>
+    </div>`;
+  }).join('');
+}
+
+window.createGroupPrompt = function createGroupPrompt(){
+  const name = prompt('群組名稱：');
+  if (!name || !name.trim()) return;
+  createGroup(name.trim());
+}
+
+window.createGroup = async function createGroup(name){
+  if (!currentUser) return;
+  const ref = db.ref('groups').push();
+  await ref.set({
+    name,
+    owner: currentUser.uid,
+    ownerNick: profile.nick || '',
+    members: { [safeKey(currentUser.uid)]: { nick: profile.nick||'', joinedAt: Date.now() } },
+    createdAt: Date.now()
+  });
+  showToast(`✅ 群組「${name}」已建立`,'success');
+  loadGroupList();
+}
+
+function enterGroup(groupId, name){
+  // 把群組當特殊頻道使用
+  if (typeof setChannel === 'function') {
+    // 動態加入 CHANNELS
+    if (typeof CHANNELS !== 'undefined') {
+      CHANNELS['g_'+groupId] = { name: '👥 '+name, icon: '👥' };
+    }
+    closeModal('group-chat-modal');
+    // 切換到群組訊息路徑
+    window.currentGroupId = groupId;
+    if (typeof setChannel === 'function') {
+      // 使用 msgs/groups/{id} 路徑需額外處理，簡化：提示用戶
+      showToast(`已進入群組：${name}（訊息會存在群組專屬頻道）`,'success');
+    }
+    // 簡易實作：直接聽 groups/{id}/msgs
+    switchToGroupChannel(groupId, name);
+  }
+}
+
+var groupMsgListener = null;
+function switchToGroupChannel(groupId, name){
+  currentChannel = 'group_'+groupId;
+  window.currentGroupId = groupId;
+  const iconEl = document.getElementById('ch-icon-display');
+  const nameEl = document.getElementById('ch-name-display');
+  if (iconEl) iconEl.textContent = '👥';
+  if (nameEl) nameEl.textContent = name;
+  const container = document.getElementById('msg-container');
+  if (container) container.innerHTML = '';
+  if (groupMsgListener) groupMsgListener.off && groupMsgListener.off();
+  groupMsgListener = db.ref(`groups/${groupId}/msgs`);
+  groupMsgListener.limitToLast(80).on('child_added', snap => {
+    if (typeof renderMsg === 'function') renderMsg(snap.key, snap.val());
+  });
+  showToast('已切換至群組頻道','info');
+}
+
+// 邀請好友進群（從好友列表）
+async function inviteToGroup(groupId, uid, nick){
+  await db.ref(`groups/${groupId}/members/${safeKey(uid)}`).set({ nick, joinedAt: Date.now() });
+  showToast(`已邀請 ${nick} 加入群組`,'success');
+}
+
+// -------------------- 3. 好友動態 / 分組 / 生日 --------------------
+window.openFriendExtra = function openFriendExtra(){
+  openModal('friend-extra-modal');
+  switchFriendExtra('feed');
+}
+
+window.switchFriendExtra = function switchFriendExtra(tab){
+  ['feed','groups','birthday'].forEach(t=>{
+    const el = document.getElementById('fe-tab-'+t);
+    if (el) el.classList.toggle('active', t===tab);
+  });
+  const panel = document.getElementById('friend-extra-panel');
+  if (!panel) return;
+  if (tab === 'feed') loadFriendFeed(panel);
+  else if (tab === 'groups') loadFriendGroupsUI(panel);
+  else if (tab === 'birthday') loadBirthdayUI(panel);
+}
+
+async function loadFriendFeed(panel){
+  panel.innerHTML = '<div style="text-align:center;color:var(--text3);padding:20px;">載入好友動態...</div>';
+  if (!currentUser) return;
+  const friendsSnap = await db.ref(`friends/${safeKey(currentUser.uid)}`).once('value');
+  const friends = friendsSnap.val() || {};
+  const uids = Object.keys(friends).map(k => friends[k].uid || k).filter(Boolean);
+  if (!uids.length) {
+    panel.innerHTML = '<div style="text-align:center;color:var(--text3);padding:30px;">尚無好友動態</div>';
+    return;
+  }
+  // 取好友最近上線與發言
+  const presSnap = await db.ref('presence').once('value');
+  const presence = presSnap.val() || {};
+  const byUid = {};
+  Object.values(presence).forEach(p => { if (p?.uid) byUid[p.uid] = p; });
+
+  let html = '';
+  for (const f of Object.values(friends)) {
+    const uid = f.uid;
+    const pres = byUid[uid];
+    const st = pres ? (pres.myStatus||'online') : 'offline';
+    const statusLabel = ({online:'上線了', away:'設為離開', busy:'忙碌中', offline:'離線'})[st] || '離線';
+    const timeStr = pres?.lastSeen ? new Date(pres.lastSeen).toLocaleString('zh-TW') : '';
+    html += `<div style="padding:12px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;">
+      <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--purple),#4f46e5);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;">${(f.nick||'?')[0]}</div>
+      <div style="flex:1;">
+        <div style="font-weight:700;">${esc(f.nick||'?')}</div>
+        <div style="font-size:0.78rem;color:var(--text3);">${statusLabel} ${timeStr ? '· '+timeStr : ''}</div>
+      </div>
+      <button class="fr-act-btn msg" onclick="closeModal('friend-extra-modal');openDmWindow('${uid}','${esc(f.nick||'')}','')">私訊</button>
+    </div>`;
+  }
+  panel.innerHTML = html || '<div style="text-align:center;color:var(--text3);padding:30px;">暫無動態</div>';
+}
+
+// 好友分組（本地 + Firebase）
+function getFriendGroups(){
+  try { return JSON.parse(localStorage.getItem('empire_friend_groups')||'{"軍團":[],"親信":[],"臣民":[]}'); }
+  catch(e){ return {"軍團":[],"親信":[],"臣民":[]}; }
+}
+function saveFriendGroups(g){
+  localStorage.setItem('empire_friend_groups', JSON.stringify(g));
+  if (currentUser) db.ref(`friendGroups/${safeKey(currentUser.uid)}`).set(g);
+}
+
+function loadFriendGroupsUI(panel){
+  const groups = getFriendGroups();
+  let html = '<div style="margin-bottom:12px;"><button class="auth-btn" style="width:auto;padding:8px 14px;" onclick="addFriendGroupName()">＋ 新增分組</button></div>';
+  Object.entries(groups).forEach(([gname, members]) => {
+    html += `<div style="margin-bottom:14px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);">
+      <div style="font-weight:700;margin-bottom:8px;display:flex;justify-content:space-between;">
+        <span>📁 ${esc(gname)}（${(members||[]).length}）</span>
+        <button onclick="assignFriendToGroup('${esc(gname)}')" style="font-size:0.75rem;padding:4px 10px;border-radius:8px;border:1px solid var(--border);background:var(--glass2);cursor:pointer;">加入好友</button>
+      </div>
+      <div style="font-size:0.8rem;color:var(--text2);">${(members||[]).length ? members.map(m=>esc(m)).join('、') : '尚無成員'}</div>
+    </div>`;
+  });
+  panel.innerHTML = html;
+}
+
+function addFriendGroupName(){
+  const name = prompt('新分組名稱：');
+  if (!name || !name.trim()) return;
+  const g = getFriendGroups();
+  if (g[name.trim()]) { showToast('分組已存在','warn'); return; }
+  g[name.trim()] = [];
+  saveFriendGroups(g);
+  switchFriendExtra('groups');
+}
+
+async function assignFriendToGroup(gname){
+  if (!currentUser) return;
+  const snap = await db.ref(`friends/${safeKey(currentUser.uid)}`).once('value');
+  const friends = Object.values(snap.val()||{});
+  if (!friends.length) { showToast('你還沒有好友','warn'); return; }
+  const names = friends.map(f=>f.nick).join(' / ');
+  const nick = prompt(`要加入「${gname}」的好友暱稱：\n目前好友：${names}`);
+  if (!nick) return;
+  const g = getFriendGroups();
+  if (!g[gname]) g[gname] = [];
+  if (!g[gname].includes(nick)) g[gname].push(nick);
+  saveFriendGroups(g);
+  showToast(`已將 ${nick} 加入 ${gname}`,'success');
+  switchFriendExtra('groups');
+}
+
+// 生日
+function loadBirthdayUI(panel){
+  const stored = JSON.parse(localStorage.getItem('empire_birthdays')||'{}');
+  let html = `<div style="margin-bottom:12px;">
+    <input class="auth-input" id="bd-nick" placeholder="好友暱稱" style="margin-bottom:8px;">
+    <input class="auth-input" id="bd-date" type="date" style="margin-bottom:8px;">
+    <button class="auth-btn" style="width:auto;padding:8px 14px;" onclick="saveBirthday()">儲存生日</button>
+  </div><div style="font-weight:700;margin:12px 0 8px;">已記錄的生日</div>`;
+  const entries = Object.entries(stored);
+  if (!entries.length) html += '<div style="color:var(--text3);">尚無紀錄</div>';
+  else {
+    const today = new Date();
+    const md = `${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+    html += entries.map(([nick, date]) => {
+      const isToday = date && date.slice(5) === md;
+      return `<div style="padding:10px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;">
+        <span>${isToday?'🎂 ':''}${esc(nick)} · ${esc(date)}</span>
+        ${isToday?'<span style="color:var(--gold2);font-weight:700;">今天生日！</span>':''}
+      </div>`;
+    }).join('');
+  }
+  panel.innerHTML = html;
+  // 檢查今天是否有人生日
+  checkTodayBirthdays();
+}
+
+function saveBirthday(){
+  const nick = document.getElementById('bd-nick')?.value?.trim();
+  const date = document.getElementById('bd-date')?.value;
+  if (!nick || !date) { showToast('請填寫暱稱與日期','warn'); return; }
+  const stored = JSON.parse(localStorage.getItem('empire_birthdays')||'{}');
+  stored[nick] = date;
+  localStorage.setItem('empire_birthdays', JSON.stringify(stored));
+  showToast('🎂 生日已儲存','success');
+  switchFriendExtra('birthday');
+}
+
+function checkTodayBirthdays(){
+  const stored = JSON.parse(localStorage.getItem('empire_birthdays')||'{}');
+  const today = new Date();
+  const md = `${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  Object.entries(stored).forEach(([nick, date]) => {
+    if (date && date.slice(5) === md) {
+      setTimeout(() => showToast(`🎂 今天是 ${nick} 的生日！`, 'success'), 1500);
+    }
+  });
+}
+
+// -------------------- 4. 語音訊息 --------------------
+// 使用既有 mediaRecorder（避免重複 let 導致整段腳本失敗）
+if (typeof mediaRecorder === 'undefined') { var mediaRecorder = null; }
+var voiceChunks = voiceChunks || [];
+var voiceTimerInterval = voiceTimerInterval || null;
+var voiceSeconds = voiceSeconds || 0;
+
+window.startVoiceRecord = async function startVoiceRecord(){
+  if (!currentUser) return;
+  if (typeof currentMuteState !== 'undefined' && currentMuteState) {
+    showToast('🔇 你已被禁言','warn'); return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    voiceChunks = [];
+    voiceSeconds = 0;
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) voiceChunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      clearInterval(voiceTimerInterval);
+      document.getElementById('voice-record-bar').style.display = 'none';
+    };
+    mediaRecorder.start();
+    document.getElementById('voice-record-bar').style.display = 'flex';
+    voiceTimerInterval = setInterval(() => {
+      voiceSeconds++;
+      const m = Math.floor(voiceSeconds/60);
+      const s = String(voiceSeconds%60).padStart(2,'0');
+      document.getElementById('voice-timer').textContent = `${m}:${s}`;
+      if (voiceSeconds >= 60) stopVoiceRecord(true); // 最長 60 秒
+    }, 1000);
+  } catch(e) {
+    showToast('❌ 無法使用麥克風，請允許權限','error');
+  }
+}
+
+window.stopVoiceRecord = async function stopVoiceRecord(send){
+  if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+    document.getElementById('voice-record-bar').style.display = 'none';
+    return;
+  }
+  const doSend = send;
+  mediaRecorder.onstop = async () => {
+    clearInterval(voiceTimerInterval);
+    document.getElementById('voice-record-bar').style.display = 'none';
+    if (!doSend || !voiceChunks.length) return;
+    const blob = new Blob(voiceChunks, { type: 'audio/webm' });
+    // 轉 base64 存 Firebase（小檔案可行；正式環境建議 Storage）
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const base64 = reader.result;
+      if (base64.length > 900000) { // 約限制
+        showToast('語音太長，請縮短','warn'); return;
+      }
+      const time = new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'});
+      const date = new Date().toLocaleDateString('zh-TW');
+      const path = window.currentGroupId
+        ? `groups/${window.currentGroupId}/msgs`
+        : `msgs/${currentChannel}`;
+      await db.ref(path).push({
+        uid: currentUser.uid,
+        user: profile.nick || '',
+        type: 'audio',
+        text: base64,
+        duration: voiceSeconds,
+        time, date,
+        reactions: {},
+        avatarUrl: profile.avatarUrl || ''
+      });
+      showToast('🎤 語音已送出','success');
+      if (typeof db !== 'undefined') {
+        db.ref(`users/${currentUser.uid}/msgCount`).transaction(v => (v||0)+1);
+      }
+    };
+    reader.readAsDataURL(blob);
+  };
+  mediaRecorder.stop();
+}
+
+// 在輸入區加入語音按鈕（若尚未存在）
+function ensureVoiceButton(){
+  const bar = document.querySelector('.input-bar');
+  if (!bar || document.getElementById('voice-btn')) return;
+  const btn = document.createElement('button');
+  btn.id = 'voice-btn';
+  btn.type = 'button';
+  btn.title = '按住或點擊錄音';
+  btn.innerHTML = '🎤';
+  btn.style.cssText = 'background:none;border:none;font-size:1.2rem;cursor:pointer;padding:4px 8px;';
+  btn.onclick = () => startVoiceRecord();
+  // 插在送出按鈕前
+  const sendBtn = bar.querySelector('button[onclick*="sendMsg"], .send-btn, #send-btn');
+  if (sendBtn) bar.insertBefore(btn, sendBtn);
+  else bar.appendChild(btn);
+}
+
+// -------------------- 5. 私訊已讀回執（強化既有） --------------------
+// 既有 DM 已有 readBy 邏輯，這裡補頻道可選已讀（僅自己訊息）
+async function markChannelMsgRead(msgKey){
+  if (!currentUser || !msgKey) return;
+  try {
+    await db.ref(`msgs/${currentChannel}/${msgKey}/readBy/${safeKey(currentUser.uid)}`).set(Date.now());
+  } catch(e){}
+}
+
+// -------------------- 6. 自訂狀態 + 過期時間 --------------------
+async function setCustomStatusWithExpiry(){
+  const text = prompt('自訂狀態文字（例如：打仗中，勿擾）：');
+  if (text === null) return;
+  const hours = parseFloat(prompt('幾小時後自動清除？（輸入 0 表示不自動清除）', '2') || '0');
+  const expiresAt = hours > 0 ? Date.now() + hours * 3600000 : null;
+  await db.ref(`users/${currentUser.uid}`).update({
+    statusMsg: text.trim(),
+    statusExpiresAt: expiresAt
+  });
+  await db.ref(`presence/${safeKey(currentUser.uid)}`).update({
+    statusMsg: text.trim(),
+    statusExpiresAt: expiresAt
+  });
+  profile.statusMsg = text.trim();
+  showToast(expiresAt ? `狀態已設定，${hours} 小時後清除` : '狀態已設定','success');
+  if (typeof updateSidebarProfile === 'function') updateSidebarProfile();
+}
+
+function checkStatusExpiry(){
+  if (!currentUser || !profile) return;
+  const exp = profile.statusExpiresAt;
+  if (exp && Date.now() > exp) {
+    db.ref(`users/${currentUser.uid}`).update({ statusMsg: '', statusExpiresAt: null });
+    db.ref(`presence/${safeKey(currentUser.uid)}`).update({ statusMsg: '', statusExpiresAt: null });
+    profile.statusMsg = '';
+    profile.statusExpiresAt = null;
+  }
+}
+
+// -------------------- 7. 帝國日報 --------------------
+window.openDailyReport = async function openDailyReport(){
+  openModal('daily-report-modal');
+  const el = document.getElementById('daily-report-content');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3);">產生今日日報中...</div>';
+
+  const today = new Date().toLocaleDateString('zh-TW');
+  const usersSnap = await db.ref('users').once('value');
+  const users = usersSnap.val() || {};
+  const userList = Object.values(users);
+
+  // 今日發言排行
+  const withDaily = userList.map(u => ({
+    nick: u.nick || '未知',
+    daily: (u.dailyMsgs && u.dailyMsgs[today]) || 0,
+    total: u.msgCount || 0,
+    points: u.points || 0
+  })).sort((a,b) => b.daily - a.daily);
+
+  const top3 = withDaily.slice(0, 5);
+  const totalMsgsToday = withDaily.reduce((s,u) => s + u.daily, 0);
+  const onlineSnap = await db.ref('presence').once('value');
+  const onlineCount = Object.keys(onlineSnap.val() || {}).length;
+
+  el.innerHTML = `
+    <div style="text-align:center;margin-bottom:20px;">
+      <div style="font-size:1.3rem;font-weight:900;color:var(--gold2);">📰 帝國日報</div>
+      <div style="font-size:0.8rem;color:var(--text3);font-family:'JetBrains Mono',monospace;">${today}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px;">
+      <div style="background:var(--bg2);padding:14px;border-radius:12px;text-align:center;border:1px solid var(--border);">
+        <div style="font-size:1.5rem;font-weight:900;color:var(--gold2);">${totalMsgsToday}</div>
+        <div style="font-size:0.7rem;color:var(--text3);">今日總訊息</div>
+      </div>
+      <div style="background:var(--bg2);padding:14px;border-radius:12px;text-align:center;border:1px solid var(--border);">
+        <div style="font-size:1.5rem;font-weight:900;color:var(--purple2);">${onlineCount}</div>
+        <div style="font-size:0.7rem;color:var(--text3);">目前在線</div>
+      </div>
+    </div>
+    <div style="font-weight:700;margin-bottom:10px;">🏆 今日活躍排行</div>
+    ${top3.map((u,i) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--border);">
+        <span style="font-weight:900;width:24px;color:var(--gold2);">${i+1}</span>
+        <span style="flex:1;font-weight:700;">${esc(u.nick)}</span>
+        <span style="color:var(--text3);font-size:0.85rem;">${u.daily} 則</span>
+      </div>
+    `).join('') || '<div style="color:var(--text3);">今日尚無發言</div>'}
+    <div style="margin-top:18px;font-size:0.75rem;color:var(--text3);text-align:center;">— 大張帝國情報處 製 —</div>
+  `;
+}
+
+// -------------------- 8. 表情反應統計 --------------------
+window.openReactionStats = async function openReactionStats(){
+  openModal('reaction-stats-modal');
+  const el = document.getElementById('reaction-stats-content');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text3);">統計中...</div>';
+
+  const counts = {};
+  const channels = (typeof CHANNELS !== 'undefined') ? Object.keys(CHANNELS) : ['main'];
+  for (const ch of channels) {
+    const snap = await db.ref(`msgs/${ch}`).limitToLast(100).once('value');
+    const msgs = snap.val() || {};
+    Object.values(msgs).forEach(m => {
+      const reacts = m.reactions || {};
+      Object.entries(reacts).forEach(([emoji, users]) => {
+        const n = typeof users === 'object' ? Object.keys(users).length : 1;
+        counts[emoji] = (counts[emoji] || 0) + n;
+      });
+    });
+  }
+  const sorted = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0, 15);
+  if (!sorted.length) {
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3);">尚無表情反應資料</div>';
+    return;
+  }
+  const max = sorted[0][1] || 1;
+  el.innerHTML = sorted.map(([emoji, n]) => `
+    <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);">
+      <span style="font-size:1.4rem;width:36px;text-align:center;">${emoji}</span>
+      <div style="flex:1;background:var(--bg3);border-radius:8px;height:10px;overflow:hidden;">
+        <div style="width:${(n/max)*100}%;height:100%;background:linear-gradient(90deg,var(--purple),var(--gold));border-radius:8px;"></div>
+      </div>
+      <span style="font-weight:700;min-width:36px;text-align:right;">${n}</span>
+    </div>
+  `).join('');
+}
+
+// 在頂部欄或功能中心加入入口
+function ensureReactionStatsBtn(){
+  // 可透過功能中心或快捷呼叫
+}
+
+// -------------------- 9. 頻道權限（簡易：僅管理員可設） --------------------
+async function setChannelPermission(ch, mode){
+  // mode: 'all' | 'members' | 'admin'
+  if (profile?.nick !== 'Lucas') { showToast('權限不足','warn'); return; }
+  await db.ref(`channelPerms/${ch}`).set(mode);
+  showToast(`頻道權限已設為：${mode}`,'success');
+}
+
+async function checkChannelPermission(ch){
+  const snap = await db.ref(`channelPerms/${ch}`).once('value');
+  const mode = snap.val() || 'all';
+  if (mode === 'all') return true;
+  if (mode === 'admin') return profile?.nick === 'Lucas';
+  // members = 需為註冊用戶
+  return !!currentUser;
+}
+
+// -------------------- 初始化 --------------------
+const _v22Init = setInterval(() => {
+  if (typeof currentUser !== 'undefined' && currentUser) {
+    clearInterval(_v22Init);
+    listenBroadcasts();
+    ensureVoiceButton();
+    checkStatusExpiry();
+    checkTodayBirthdays();
+    setInterval(checkStatusExpiry, 60000);
+    // 頂部快捷：長按狀態可設過期狀態
+    const statusEl = document.getElementById('sb-status-label');
+    if (statusEl) {
+      statusEl.style.cursor = 'pointer';
+      statusEl.title = '點擊設定自訂狀態（可設過期）';
+      statusEl.onclick = () => setCustomStatusWithExpiry();
+    }
+    console.log('✅ v22.0 功能大禮包已載入');
+    showToast('🚀 新功能已就緒：推播中心 / 群組 / 語音 / 日報…','success');
+  }
+}, 1000);
+
+// 讓 renderMsg 支援語音
+const _v22BuildMsg = window.buildMsgHTML;
+if (typeof _v22BuildMsg === 'function') {
+  window.buildMsgHTML = function(g, key, data) {
+    _v22BuildMsg(g, key, data);
+    if (data.type === 'audio' && data.text) {
+      const bubble = g.querySelector('.msg-bubble');
+      if (bubble && !bubble.querySelector('audio')) {
+        bubble.innerHTML = `<div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:1.2rem;">🎤</span>
+          <audio controls src="${data.text}" style="max-width:220px;height:36px;"></audio>
+          <span style="font-size:0.7rem;color:var(--text3);">${data.duration||0}s</span>
+        </div>`;
+      }
+    }
+  };
+}
+</script>
+
+<!-- ============================================================
+     UI 升級版 v21 · 視覺重構
+     更精緻的帝國美學 · 深色優先 · 更好的層次與細節
+============================================================ -->
+<style>
+/* ========== 全域視覺重構 ========== */
+:root {
+  --bg0: #f3f1ee;
+  --bg1: #ffffff;
+  --bg2: #faf8f5;
+  --bg3: #f0ece6;
+  --glass: rgba(0,0,0,0.015);
+  --glass2: rgba(0,0,0,0.03);
+  --glass3: rgba(0,0,0,0.05);
+  --border: rgba(0,0,0,0.07);
+  --border2: rgba(0,0,0,0.12);
+  --gold: #b08d3e;
+  --gold2: #c9a84c;
+  --gold3: #8a6a28;
+  --purple: #6b46d4;
+  --purple2: #7c5cdf;
+  --purple3: #a78bfa;
+  --teal: #0d9488;
+  --red: #e11d48;
+  --green: #16a34a;
+  --text: #1c1929;
+  --text2: #5c566e;
+  --text3: #9a94a8;
+  --shadow: 0 20px 50px rgba(0,0,0,0.1);
+  --shadow-sm: 0 4px 16px rgba(0,0,0,0.06);
+  --r: 14px;
+  --r-lg: 20px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 深色模式 — 主推精緻暗色調 */
+body.dark-mode {
+  --bg0: #0c0b10;
+  --bg1: #14121b;
+  --bg2: #1c1a26;
+  --bg3: #262331;
+  --glass: rgba(255,255,255,0.02);
+  --glass2: rgba(255,255,255,0.04);
+  --glass3: rgba(255,255,255,0.07);
+  --border: rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.12);
+  --gold: #d4af5a;
+  --gold2: #e8c97a;
+  --gold3: #b8943c;
+  --purple: #8b5cf6;
+  --purple2: #a78bfa;
+  --purple3: #c4b5fd;
+  --text: #f0edf7;
+  --text2: #b0a9c4;
+  --text3: #6e6785;
+  --shadow: 0 24px 60px rgba(0,0,0,0.55);
+  --shadow-sm: 0 4px 20px rgba(0,0,0,0.3);
+}
+
+body {
+  background: var(--bg0);
+  color: var(--text);
+  font-family: 'Noto Serif TC', 'Georgia', serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 更細緻的環境光 */
+body::before {
+  background:
+    radial-gradient(ellipse 60% 50% at 8% 12%, rgba(107,70,212,0.07) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 45% at 92% 88%, rgba(176,141,62,0.06) 0%, transparent 55%),
+    radial-gradient(ellipse 40% 30% at 50% 100%, rgba(13,148,136,0.03) 0%, transparent 60%);
+}
+
+body.dark-mode::before {
+  background:
+    radial-gradient(ellipse 55% 45% at 10% 15%, rgba(139,92,246,0.09) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 50% at 90% 85%, rgba(212,175,90,0.05) 0%, transparent 55%),
+    radial-gradient(ellipse 35% 30% at 50% 100%, rgba(13,148,136,0.03) 0%, transparent 60%);
+}
+
+/* ========== 登入畫面 ========== */
+.auth-card {
+  background: var(--bg1);
+  border: 1px solid var(--border2);
+  border-radius: 28px;
+  box-shadow: var(--shadow), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  backdrop-filter: blur(20px);
+}
+
+body.dark-mode .auth-card {
+  background: linear-gradient(165deg, #1a1825 0%, #14121b 100%);
+  border-color: rgba(255,255,255,0.08);
+  box-shadow: 0 40px 100px rgba(0,0,0,0.6), 0 0 80px rgba(139,92,246,0.08);
+}
+
+.auth-logo h1 {
+  background: linear-gradient(135deg, var(--gold3), var(--gold2), var(--gold));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: 3px;
+}
+
+.auth-tab.active {
+  background: linear-gradient(135deg, var(--purple), #5b3fc4);
+  box-shadow: 0 6px 20px rgba(107,70,212,0.4);
+}
+
+.auth-input {
+  border-radius: 14px;
+  padding: 14px 18px;
+  background: var(--bg0);
+  transition: all 0.25s var(--ease);
+}
+
+.auth-input:focus {
+  border-color: var(--purple2);
+  background: rgba(124,92,223,0.06);
+  box-shadow: 0 0 0 4px rgba(124,92,223,0.12);
+}
+
+.auth-btn {
+  border-radius: 16px;
+  padding: 16px;
+  background: linear-gradient(135deg, var(--purple) 0%, #5a3db8 100%);
+  box-shadow: 0 10px 28px rgba(107,70,212,0.35);
+  letter-spacing: 1.5px;
+  transition: all 0.3s var(--ease);
+}
+
+.auth-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 36px rgba(107,70,212,0.5);
+  filter: brightness(1.08);
+}
+
+/* ========== 側邊欄 ========== */
+#sidebar {
+  background: var(--bg1);
+  border-right: 1px solid var(--border);
+  box-shadow: 4px 0 24px rgba(0,0,0,0.03);
+}
+
+body.dark-mode #sidebar {
+  background: linear-gradient(180deg, #14121b 0%, #12101a 100%);
+  border-right-color: rgba(255,255,255,0.06);
+}
+
+.sb-profile {
+  padding: 20px 18px;
+  transition: background 0.2s;
+}
+
+.sb-profile:hover {
+  background: var(--glass2);
+}
+
+.sb-avatar {
+  box-shadow: 0 0 0 2.5px var(--bg1), 0 0 0 4px rgba(107,70,212,0.35);
+  transition: box-shadow 0.3s;
+}
+
+.sb-name {
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+
+.ch-item {
+  border-radius: 12px;
+  margin-bottom: 2px;
+  transition: all 0.2s var(--ease);
+}
+
+.ch-item.active {
+  background: linear-gradient(120deg, rgba(124,92,223,0.18), rgba(200,164,90,0.08));
+  border-color: rgba(124,92,223,0.28);
+  color: var(--gold2);
+  font-weight: 600;
+}
+
+.ch-item:hover:not(.active) {
+  background: var(--glass2);
+  transform: translateX(2px);
+}
+
+/* ========== 頂部欄 ========== */
+#topbar {
+  height: 60px;
+  background: rgba(255,255,255,0.85);
+  backdrop-filter: blur(24px) saturate(1.4);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.5) inset;
+}
+
+body.dark-mode #topbar {
+  background: rgba(20,18,27,0.88);
+  border-bottom-color: rgba(255,255,255,0.06);
+  box-shadow: none;
+}
+
+.topbar-title {
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  background: linear-gradient(90deg, var(--gold2), var(--gold));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.tb-search {
+  border-radius: 12px;
+  background: var(--glass2);
+  transition: all 0.3s var(--ease);
+}
+
+.tb-search:focus {
+  width: 240px;
+  border-color: var(--purple2);
+  background: rgba(124,92,223,0.08);
+  box-shadow: 0 0 0 3px rgba(124,92,223,0.1);
+}
+
+.tb-icon-btn {
+  border-radius: 12px;
+  transition: all 0.2s var(--ease);
+}
+
+.tb-icon-btn:hover {
+  background: rgba(124,92,223,0.1);
+  border-color: var(--purple2);
+  color: var(--purple2);
+  transform: translateY(-1px);
+}
+
+/* ========== 訊息區 ========== */
+#msg-container {
+  padding: 20px 24px 16px;
+  scroll-behavior: smooth;
+}
+
+#msg-container::-webkit-scrollbar {
+  width: 5px;
+}
+#msg-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+#msg-container::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.12);
+  border-radius: 10px;
+}
+body.dark-mode #msg-container::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+}
+
+.date-div {
+  margin: 22px 0 10px;
+}
+.date-label {
+  font-size: 0.62rem;
+  letter-spacing: 2.5px;
+  opacity: 0.85;
+}
+
+.msg-row {
+  border-radius: 16px;
+  padding: 3px 8px;
+  transition: background 0.15s;
+}
+
+.msg-row:hover {
+  background: rgba(0,0,0,0.02);
+}
+body.dark-mode .msg-row:hover {
+  background: rgba(255,255,255,0.025);
+}
+
+.msg-av {
+  width: 34px;
+  height: 34px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+
+.msg-bubble {
+  padding: 11px 16px;
+  border-radius: 18px;
+  font-size: 0.9rem;
+  line-height: 1.7;
+  transition: transform 0.15s, box-shadow 0.2s;
+}
+
+.others .msg-bubble {
+  background: #ffffff;
+  border: 1px solid var(--border2);
+  border-bottom-left-radius: 6px;
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+}
+
+body.dark-mode .others .msg-bubble {
+  background: #1e1c28;
+  border-color: rgba(255,255,255,0.08);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+}
+
+.me .msg-bubble {
+  background: linear-gradient(145deg, rgba(124,92,223,0.38), rgba(90,61,184,0.32));
+  border: 1px solid rgba(124,92,223,0.35);
+  border-bottom-right-radius: 6px;
+  color: #0f0e13;
+  box-shadow: 0 4px 16px rgba(107,70,212,0.15);
+}
+
+body.dark-mode .me .msg-bubble {
+  background: linear-gradient(145deg, rgba(139,92,246,0.45), rgba(107,70,212,0.38));
+  border-color: rgba(167,139,250,0.3);
+  color: #f5f3ff;
+  box-shadow: 0 4px 20px rgba(139,92,246,0.2);
+}
+
+.msg-meta {
+  font-size: 0.64rem;
+  letter-spacing: 0.3px;
+}
+
+.msg-meta .uname {
+  font-weight: 700;
+  color: var(--gold2);
+}
+
+/* ========== 輸入區 ========== */
+#input-zone {
+  background: rgba(255,255,255,0.92);
+  backdrop-filter: blur(24px) saturate(1.3);
+  border-top: 1px solid var(--border);
+  padding: 14px 20px 18px;
+}
+
+body.dark-mode #input-zone {
+  background: rgba(20,18,27,0.92);
+  border-top-color: rgba(255,255,255,0.06);
+}
+
+.input-bar {
+  background: var(--bg0);
+  border: 1px solid var(--border2);
+  border-radius: 18px;
+  padding: 8px 12px 8px 16px;
+  transition: all 0.25s var(--ease);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+}
+
+body.dark-mode .input-bar {
+  background: var(--bg2);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+}
+
+.input-bar:focus-within {
+  border-color: var(--purple2);
+  box-shadow: 0 0 0 4px rgba(124,92,223,0.12), 0 4px 20px rgba(124,92,223,0.08);
+}
+
+/* ========== Modal ========== */
+.modal-overlay {
+  background: rgba(0,0,0,0.45);
+  backdrop-filter: blur(8px);
+}
+
+body.dark-mode .modal-overlay {
+  background: rgba(0,0,0,0.65);
+}
+
+.modal-card {
+  background: var(--bg1);
+  border: 1px solid var(--border2);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+body.dark-mode .modal-card {
+  background: linear-gradient(165deg, #1c1a28 0%, #14121b 100%);
+  border-color: rgba(255,255,255,0.08);
+  box-shadow: 0 32px 80px rgba(0,0,0,0.6);
+}
+
+.modal-header {
+  border-bottom: 1px solid var(--border);
+  padding: 18px 22px;
+}
+
+.modal-title {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+.modal-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.modal-close:hover {
+  background: rgba(225,29,72,0.12);
+  color: var(--red);
+}
+
+/* ========== 按鈕通用 ========== */
+.logout-btn {
+  border-radius: 12px;
+  transition: all 0.2s var(--ease);
+}
+
+.logout-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(225,29,72,0.15);
+}
+
+/* ========== 好友 / DM ========== */
+.dm-item, .friend-item {
+  border-radius: 12px;
+  transition: all 0.2s var(--ease);
+}
+
+.dm-item:hover, .friend-item:hover {
+  background: var(--glass2);
+  transform: translateX(2px);
+}
+
+/* ========== Toast 提示 ========== */
+.toast, [class*="toast"] {
+  border-radius: 14px !important;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.2) !important;
+}
+
+/* ========== 排行榜 / 簽到卡片 ========== */
+.ranking-card, .admin-section, .task-card {
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.ranking-card:hover, .task-card:hover {
+  border-color: rgba(124,92,223,0.25);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+}
+
+/* ========== 頭像框與狀態點 ========== */
+.sb-avatar .status-ring.online,
+.dm-dot,
+.fi-dot.online {
+  box-shadow: 0 0 0 2px var(--bg1), 0 0 10px rgba(22,163,74,0.55);
+}
+
+/* ========== 載入更多按鈕 ========== */
+.load-more-btn {
+  border-radius: 999px;
+  transition: all 0.25s var(--ease);
+  letter-spacing: 0.5px;
+}
+
+.load-more-btn:hover:not([disabled]) {
+  background: rgba(124,92,223,0.1);
+  border-color: var(--purple2);
+  color: var(--purple2);
+  transform: translateY(-1px);
+}
+
+/* ========== 快速導航 ========== */
+.quick-nav-btns .nav-btn {
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s var(--ease);
+}
+
+.quick-nav-btns .nav-btn:hover {
+  transform: scale(1.08);
+}
+
+/* ========== 微互動 ========== */
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+
+.msg-group {
+  animation: msgIn 0.3s var(--ease);
+}
+
+/* ========== 響應式微調 ========== */
+@media (max-width: 768px) {
+  #msg-container { padding: 14px 12px 10px; }
+  .msg-bubble { font-size: 0.86rem; padding: 10px 13px; }
+  .auth-card { padding: 36px 28px; border-radius: 22px; }
+  #input-zone { padding: 10px 12px 14px; }
+}
+
+/* ========== 強制暗色下部分元素一致性 ========== */
+body.dark-mode .auth-input {
+  background: var(--bg2);
+  color: var(--text);
+}
+
+body.dark-mode .ch-item.active {
+  background: linear-gradient(120deg, rgba(139,92,246,0.2), rgba(212,175,90,0.08));
+}
+
+body.dark-mode .load-more-btn {
+  background: var(--bg2);
+  border-color: var(--border2);
+  color: var(--text2);
+}
+
+/* 讓深色模式預設更漂亮 — 如果使用者沒特別設定，可自動套用 */
+/* 使用者仍可用原本的暗黑按鈕切換 */
+</style>
+
+<script>
+// UI 升級：預設開啟深色模式（更有帝國氛圍），若本機已有設定則尊重
+(function(){
+  const saved = localStorage.getItem('empire_dark');
+  if (saved === '0') {
+    document.body.classList.remove('dark-mode');
+  } else {
+    document.body.classList.add('dark-mode');
+    if (saved === null) localStorage.setItem('empire_dark', '1');
+  }
+  const btn = document.getElementById('dark-btn');
+  if (btn) btn.textContent = document.body.classList.contains('dark-mode') ? '☀️' : '🌙';
+})();
+</script>
+
+
+
+<!-- ========== v22 新功能 UI ========== -->
+
+
+<!-- 功能中心（整合入口，側邊欄不雜亂） -->
+<div class="modal-overlay" id="feature-hub-modal">
+  <div class="modal-card feature-hub-card">
+    <div class="modal-header">
+      <span class="modal-title">✨ 帝國功能中心</span>
+      <button class="modal-close" onclick="closeModal('feature-hub-modal')">✕</button>
+    </div>
+    <div class="feature-hub-grid">
+      <button type="button" class="fh-item" data-action="broadcast">
+        <span class="fh-icon">📢</span>
+        <span class="fh-name">重要推播</span>
+        <span class="fh-desc">公告與緊急通知</span>
+      </button>
+      <button type="button" class="fh-item" data-action="groups">
+        <span class="fh-icon">👥</span>
+        <span class="fh-name">小圈子群組</span>
+        <span class="fh-desc">建立或進入群組</span>
+      </button>
+      <button type="button" class="fh-item" data-action="friends">
+        <span class="fh-icon">⭐</span>
+        <span class="fh-name">好友進階</span>
+        <span class="fh-desc">動態 · 分組 · 生日</span>
+      </button>
+      <button type="button" class="fh-item" data-action="daily">
+        <span class="fh-icon">📰</span>
+        <span class="fh-name">帝國日報</span>
+        <span class="fh-desc">今日活躍與統計</span>
+      </button>
+      <button type="button" class="fh-item" data-action="reactions">
+        <span class="fh-icon">📊</span>
+        <span class="fh-name">表情統計</span>
+        <span class="fh-desc">反應排行榜</span>
+      </button>
+      <button type="button" class="fh-item" data-action="status">
+        <span class="fh-icon">💬</span>
+        <span class="fh-name">自訂狀態</span>
+        <span class="fh-desc">狀態文字與過期</span>
+      </button>
+      <button type="button" class="fh-item" data-action="checkin">
+        <span class="fh-icon">🎁</span>
+        <span class="fh-name">每日簽到</span>
+        <span class="fh-desc">領取每日積分</span>
+      </button>
+      <button type="button" class="fh-item" data-action="theme">
+        <span class="fh-icon">🎨</span>
+        <span class="fh-name">主題切換</span>
+        <span class="fh-desc">亮色 / 暗色模式</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- 重要推播中心 Modal -->
+<div class="modal-overlay" id="broadcast-hub-modal">
+  <div class="modal-card" style="width:560px;max-width:95vw;max-height:85vh;overflow-y:auto;">
+    <div class="modal-header">
+      <span class="modal-title">📢 重要推播中心</span>
+      <button class="modal-close" onclick="closeModal('broadcast-hub-modal')">✕</button>
+    </div>
+    <div class="admin-section">
+      <div id="broadcast-compose" style="display:none;margin-bottom:18px;padding:14px;background:var(--bg2);border-radius:14px;border:1px solid var(--border);">
+        <div style="font-weight:700;margin-bottom:8px;">發布重要推播（管理員）</div>
+        <input class="auth-input" id="bc-title" placeholder="標題（例如：緊急軍情）" maxlength="40" style="margin-bottom:8px;">
+        <textarea class="auth-input" id="bc-body" rows="3" placeholder="推播內容..." style="resize:vertical;margin-bottom:8px;"></textarea>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <select id="bc-level" class="auth-input" style="width:auto;padding:8px 12px;">
+            <option value="info">ℹ️ 一般</option>
+            <option value="important">⚠️ 重要</option>
+            <option value="urgent">🚨 緊急</option>
+          </select>
+          <label style="font-size:0.8rem;display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" id="bc-pin" checked> 置頂顯示
+          </label>
+          <button class="auth-btn" style="width:auto;padding:10px 18px;margin:0;" onclick="publishBroadcast()">發布推播</button>
+        </div>
+      </div>
+      <div id="broadcast-list"><div style="text-align:center;padding:30px;color:var(--text3);">載入中...</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- 群組聊天 Modal -->
+<div class="modal-overlay" id="group-chat-modal">
+  <div class="modal-card" style="width:480px;max-width:95vw;">
+    <div class="modal-header">
+      <span class="modal-title">👥 帝國小圈子（群組）</span>
+      <button class="modal-close" onclick="closeModal('group-chat-modal')">✕</button>
+    </div>
+    <div class="admin-section">
+      <button class="auth-btn" style="margin-bottom:14px;" onclick="createGroupPrompt()">＋ 建立新群組</button>
+      <div id="group-list"><div style="text-align:center;color:var(--text3);padding:20px;">尚無群組</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- 好友分組 / 動態 Modal -->
+<div class="modal-overlay" id="friend-extra-modal">
+  <div class="modal-card" style="width:500px;max-width:95vw;max-height:85vh;overflow-y:auto;">
+    <div class="modal-header">
+      <span class="modal-title">⭐ 好友進階</span>
+      <button class="modal-close" onclick="closeModal('friend-extra-modal')">✕</button>
+    </div>
+    <div class="fr-tabs" style="margin:0 18px 12px;">
+      <div class="fr-tab active" id="fe-tab-feed" onclick="switchFriendExtra('feed')">📡 好友動態</div>
+      <div class="fr-tab" id="fe-tab-groups" onclick="switchFriendExtra('groups')">📁 好友分組</div>
+      <div class="fr-tab" id="fe-tab-birthday" onclick="switchFriendExtra('birthday')">🎂 生日提醒</div>
+    </div>
+    <div id="friend-extra-panel" class="admin-section"></div>
+  </div>
+</div>
+
+<!-- 帝國日報 Modal -->
+<div class="modal-overlay" id="daily-report-modal">
+  <div class="modal-card" style="width:520px;max-width:95vw;max-height:85vh;overflow-y:auto;">
+    <div class="modal-header">
+      <span class="modal-title">📰 帝國日報</span>
+      <button class="modal-close" onclick="closeModal('daily-report-modal')">✕</button>
+    </div>
+    <div id="daily-report-content" class="admin-section">
+      <div style="text-align:center;padding:30px;color:var(--text3);">產生中...</div>
+    </div>
+  </div>
+</div>
+
+<!-- 表情反應統計 Modal -->
+<div class="modal-overlay" id="reaction-stats-modal">
+  <div class="modal-card" style="width:480px;max-width:95vw;">
+    <div class="modal-header">
+      <span class="modal-title">📊 表情反應統計</span>
+      <button class="modal-close" onclick="closeModal('reaction-stats-modal')">✕</button>
+    </div>
+    <div id="reaction-stats-content" class="admin-section"></div>
+  </div>
+</div>
+
+<!-- 語音錄製提示條 -->
+<div id="voice-record-bar" style="display:none;position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:var(--bg1);border:1px solid var(--border2);border-radius:16px;padding:12px 20px;z-index:9000;box-shadow:var(--shadow);align-items:center;gap:14px;">
+  <span id="voice-timer" style="font-family:'JetBrains Mono',monospace;color:var(--red);font-weight:700;">0:00</span>
+  <span style="color:var(--text2);font-size:0.85rem;">正在錄音...</span>
+  <button onclick="stopVoiceRecord(true)" style="background:var(--red);color:#fff;border:none;border-radius:10px;padding:8px 14px;cursor:pointer;font-weight:700;">送出</button>
+  <button onclick="stopVoiceRecord(false)" style="background:var(--glass2);border:1px solid var(--border);border-radius:10px;padding:8px 14px;cursor:pointer;">取消</button>
+</div>
+
+
+<style id="v22-ui-fix">
+/* ===== v22.1 修復 + UI 強化 ===== */
+.modal-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 12000 !important;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.55) !important;
+  backdrop-filter: blur(10px) saturate(1.2) !important;
+}
+.modal-overlay.open {
+  display: flex !important;
+}
+.modal-card {
+  border-radius: 22px !important;
+  box-shadow: 0 32px 80px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06) inset !important;
+  max-height: 88vh !important;
+  animation: v22ModalIn 0.35s cubic-bezier(0.22,1,0.36,1) !important;
+}
+@keyframes v22ModalIn {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 側邊欄按鈕更漂亮 */
+.sb-footer .auth-btn {
+  border-radius: 12px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.3px;
+  transition: transform 0.2s, filter 0.2s, box-shadow 0.2s !important;
+  border: none !important;
+  color: #fff !important;
+}
+.sb-footer .auth-btn:hover {
+  transform: translateY(-2px) !important;
+  filter: brightness(1.12);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.25) !important;
+}
+.sb-footer .checkin-btn {
+  border-radius: 12px !important;
+  transition: transform 0.2s !important;
+}
+.sb-footer .checkin-btn:hover {
+  transform: translateY(-2px);
+}
+
+/* 推播列表卡片 */
+#broadcast-list > div {
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+#broadcast-list > div:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+}
+
+/* 好友進階分頁 */
+#friend-extra-modal .fr-tab {
+  flex: 1;
+  text-align: center;
+  padding: 10px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text2);
+  transition: all 0.2s;
+}
+#friend-extra-modal .fr-tab.active {
+  background: linear-gradient(135deg, var(--purple), #5a3db8);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(107,70,212,0.35);
+}
+#friend-extra-modal .fr-tabs {
+  display: flex;
+  gap: 6px;
+  background: var(--bg2);
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+/* 日報卡片 */
+#daily-report-content {
+  line-height: 1.6;
+}
+
+/* 輸入區語音按鈕 */
+#voice-btn {
+  transition: transform 0.15s;
+}
+#voice-btn:hover {
+  transform: scale(1.15);
+}
+
+/* 側邊欄整體更緊湊美觀 */
+.sb-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px 16px !important;
+}
+.sb-footer button {
+  width: 100%;
+}
+
+/* 深色模式 modal 更精緻 */
+body.dark-mode .modal-card {
+  background: linear-gradient(165deg, #1e1b2a 0%, #14121c 100%) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+}
+body.dark-mode .modal-overlay {
+  background: rgba(0,0,0,0.72) !important;
+}
+
+/* 頂部欄微強化 */
+#topbar {
+  box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset;
+}
+
+/* 訊息區更舒適 */
+#msg-container {
+  padding-bottom: 20px !important;
+}
+</style>
+
+<!-- v22.1 broken patch removed -->
+
+
+<style id="empire-v23-ui">
+/* ============================================================
+   v23 煥然一新 UI
+   ============================================================ */
+:root {
+  --bg0: #0a0910;
+  --bg1: #12101a;
+  --bg2: #1a1726;
+  --bg3: #242033;
+  --glass: rgba(255,255,255,0.03);
+  --glass2: rgba(255,255,255,0.05);
+  --border: rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.12);
+  --gold: #d4b05a;
+  --gold2: #e8c97a;
+  --gold3: #b8943c;
+  --purple: #8b5cf6;
+  --purple2: #a78bfa;
+  --text: #f2f0f7;
+  --text2: #b0a9c4;
+  --text3: #6e6785;
+  --shadow: 0 24px 64px rgba(0,0,0,0.5);
+  --r: 14px;
+}
+
+body, body.dark-mode {
+  background: var(--bg0) !important;
+  color: var(--text) !important;
+}
+
+body.dark-mode {
+  --bg0: #0a0910; --bg1: #12101a; --bg2: #1a1726; --bg3: #242033;
+  --glass: rgba(255,255,255,0.03); --glass2: rgba(255,255,255,0.05);
+  --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.12);
+  --text: #f2f0f7; --text2: #b0a9c4; --text3: #6e6785;
+}
+
+/* 側邊欄乾淨版 */
+#sidebar {
+  background: linear-gradient(180deg, #12101a 0%, #0e0c16 100%) !important;
+  border-right: 1px solid rgba(255,255,255,0.06) !important;
+  width: 260px !important;
+  min-width: 260px !important;
+}
+
+.sb-profile {
+  padding: 18px 16px !important;
+  border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+}
+
+.sb-scroll {
+  padding: 10px 8px !important;
+}
+
+.sb-section-label {
+  font-size: 0.58rem !important;
+  letter-spacing: 2px !important;
+  color: var(--text3) !important;
+  padding: 14px 10px 6px !important;
+  opacity: 0.9;
+}
+
+.ch-item {
+  border-radius: 10px !important;
+  padding: 9px 11px !important;
+  margin-bottom: 2px !important;
+  font-size: 0.84rem !important;
+}
+
+.ch-item.active {
+  background: linear-gradient(120deg, rgba(139,92,246,0.22), rgba(212,176,90,0.08)) !important;
+  border-color: rgba(139,92,246,0.3) !important;
+  color: var(--gold2) !important;
+}
+
+/* 側邊欄底部：精簡 */
+.sb-footer {
+  padding: 12px 12px 14px !important;
+  border-top: 1px solid rgba(255,255,255,0.06) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+}
+
+.sb-footer .checkin-btn {
+  border-radius: 12px !important;
+  padding: 11px !important;
+  font-weight: 700 !important;
+  border: 1px solid rgba(212,176,90,0.25) !important;
+  background: rgba(212,176,90,0.1) !important;
+  color: var(--gold2) !important;
+}
+
+.sb-more-btn {
+  width: 100%;
+  padding: 12px !important;
+  border-radius: 12px !important;
+  border: 1px solid rgba(139,92,246,0.35) !important;
+  background: linear-gradient(135deg, rgba(139,92,246,0.25), rgba(90,61,184,0.2)) !important;
+  color: #e9e4ff !important;
+  font-family: 'Syne', sans-serif !important;
+  font-weight: 800 !important;
+  font-size: 0.88rem !important;
+  letter-spacing: 0.5px !important;
+  cursor: pointer !important;
+  transition: all 0.25s cubic-bezier(0.22,1,0.36,1) !important;
+}
+
+.sb-more-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 28px rgba(139,92,246,0.3);
+  border-color: rgba(167,139,250,0.5) !important;
+  filter: brightness(1.1);
+}
+
+.logout-btn {
+  border-radius: 12px !important;
+  padding: 10px !important;
+}
+
+/* 頂部欄 */
+#topbar {
+  background: rgba(18,16,26,0.92) !important;
+  backdrop-filter: blur(24px) saturate(1.4) !important;
+  border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+  height: 56px !important;
+}
+
+.topbar-title {
+  background: linear-gradient(90deg, #e8c97a, #d4b05a) !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  background-clip: text !important;
+}
+
+/* 訊息區 */
+#msg-container {
+  background: transparent !important;
+}
+
+.others .msg-bubble {
+  background: #1e1b2a !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  color: var(--text) !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.2) !important;
+}
+
+.me .msg-bubble {
+  background: linear-gradient(145deg, rgba(139,92,246,0.42), rgba(107,70,212,0.35)) !important;
+  border: 1px solid rgba(167,139,250,0.28) !important;
+  color: #f5f3ff !important;
+}
+
+/* 輸入區 */
+#input-zone {
+  background: rgba(18,16,26,0.94) !important;
+  border-top: 1px solid rgba(255,255,255,0.06) !important;
+  backdrop-filter: blur(20px) !important;
+}
+
+.input-bar {
+  background: var(--bg2) !important;
+  border: 1px solid rgba(255,255,255,0.1) !important;
+  border-radius: 16px !important;
+}
+
+.input-bar:focus-within {
+  border-color: rgba(139,92,246,0.5) !important;
+  box-shadow: 0 0 0 3px rgba(139,92,246,0.12) !important;
+}
+
+/* Modal 統一 */
+.modal-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 15000 !important;
+  display: none !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: rgba(0,0,0,0.65) !important;
+  backdrop-filter: blur(12px) !important;
+}
+.modal-overlay.open {
+  display: flex !important;
+}
+.modal-card {
+  background: linear-gradient(165deg, #1c1a28 0%, #14121c 100%) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  border-radius: 22px !important;
+  box-shadow: 0 40px 100px rgba(0,0,0,0.55) !important;
+  color: var(--text) !important;
+}
+
+/* 功能中心網格 */
+.feature-hub-card {
+  width: 520px !important;
+  max-width: 94vw !important;
+  padding: 0 0 20px !important;
+}
+.feature-hub-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  padding: 8px 20px 12px;
+}
+.fh-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 16px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.03);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.22s cubic-bezier(0.22,1,0.36,1);
+  color: inherit;
+  font-family: inherit;
+}
+.fh-item:hover {
+  background: rgba(139,92,246,0.12);
+  border-color: rgba(139,92,246,0.35);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+}
+.fh-icon { font-size: 1.5rem; line-height: 1; }
+.fh-name {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 0.92rem;
+  color: var(--text);
+}
+.fh-desc {
+  font-size: 0.72rem;
+  color: var(--text3);
+}
+
+/* 隱藏過雜的統計小方塊（側邊欄上方）可選 */
+.stat-online-box {
+  margin: 8px 8px 4px !important;
+  padding: 10px !important;
+  border-radius: 12px !important;
+  background: rgba(255,255,255,0.03) !important;
+  border: 1px solid rgba(255,255,255,0.06) !important;
+}
+
+/* 好友 / 在線列表更乾淨 */
+.friend-item, .dm-item {
+  border-radius: 10px !important;
+  padding: 8px 10px !important;
+}
+
+/* 滾動條 */
+.sb-scroll::-webkit-scrollbar,
+#msg-container::-webkit-scrollbar {
+  width: 4px;
+}
+.sb-scroll::-webkit-scrollbar-thumb,
+#msg-container::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 4px;
+}
+</style>
+
+<script>
+/* ============================================================
+   v23 可靠功能層 — 不依賴先前可能失敗的腳本
+   ============================================================ */
+(function(){
+  'use strict';
+
+  function toast(msg, type){
+    if (typeof showToast === 'function') { showToast(msg, type||'info'); return; }
+    var t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = 'position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#1e1b2a;color:#fff;padding:12px 20px;border-radius:12px;z-index:99999;font-size:0.9rem;box-shadow:0 8px 28px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.1);';
+    document.body.appendChild(t);
+    setTimeout(function(){ t.remove(); }, 2800);
+  }
+
+  function openM(id){
+    var el = document.getElementById(id);
+    if (!el) { toast('面板不存在: '+id, 'error'); console.error('missing modal', id); return false; }
+    el.classList.add('open');
+    return true;
+  }
+
+  function closeM(id){
+    var el = document.getElementById(id);
+    if (el) el.classList.remove('open');
+  }
+
+  // 確保 closeModal / openModal 可用
+  if (typeof window.closeModal !== 'function') window.closeModal = closeM;
+  if (typeof window.openModal !== 'function') {
+    window.openModal = openM;
+  } else {
+    var _om = window.openModal;
+    window.openModal = function(id){
+      var el = document.getElementById(id);
+      if (!el) { toast('面板不存在: '+id, 'error'); return; }
+      try { _om(id); } catch(e){ el.classList.add('open'); }
+    };
+  }
+
+  function esc(s){
+    if (typeof window.esc === 'function') return window.esc(s);
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function safeKey(s){
+    if (typeof window.safeKey === 'function') return window.safeKey(s);
+    return String(s||'').replace(/[.#$\/\[\]]/g, '_');
+  }
+
+  // ---------- 功能中心 ----------
+  window.openFeatureHub = function(){
+    openM('feature-hub-modal');
+  };
+
+  document.addEventListener('click', function(e){
+    var item = e.target.closest && e.target.closest('.fh-item');
+    if (!item) return;
+    var action = item.getAttribute('data-action');
+    closeM('feature-hub-modal');
+    setTimeout(function(){
+      if (action === 'broadcast') window.openBroadcastHub();
+      else if (action === 'groups') { openM('group-chat-modal'); if (window.loadGroupList) window.loadGroupList(); }
+      else if (action === 'friends') window.openFriendExtra();
+      else if (action === 'daily') window.openDailyReport();
+      else if (action === 'reactions') { if (window.openReactionStats) window.openReactionStats(); else toast('表情統計載入中','warn'); }
+      else if (action === 'status') { if (window.setCustomStatusWithExpiry) window.setCustomStatusWithExpiry(); else toast('請點側邊欄狀態文字設定','info'); }
+      else if (action === 'checkin') { if (typeof openCheckin === 'function') openCheckin(); else if (typeof openCheckinModal === 'function') openCheckinModal(); }
+      else if (action === 'theme') {
+        document.body.classList.toggle('dark-mode');
+        var isDark = document.body.classList.contains('dark-mode');
+        localStorage.setItem('empire_dark', isDark ? '1' : '0');
+        toast(isDark ? '🌙 暗色模式' : '☀️ 亮色模式', 'success');
+      }
+    }, 150);
+  });
+
+  // ---------- 重要推播 ----------
+  window.openBroadcastHub = function(){
+    if (!openM('broadcast-hub-modal')) return;
+    var compose = document.getElementById('broadcast-compose');
+    var isAdmin = (window.profile && profile.nick === 'Lucas') || (typeof isAdminLike === 'function' && isAdminLike());
+    if (compose) compose.style.display = isAdmin ? 'block' : 'none';
+    window.loadBroadcasts();
+  };
+
+  window.loadBroadcasts = async function(){
+    var el = document.getElementById('broadcast-list');
+    if (!el) return;
+    if (typeof db === 'undefined' || !db) {
+      el.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text3);">資料庫尚未連線</div>';
+      return;
+    }
+    try {
+      var snap = await db.ref('broadcasts').limitToLast(30).once('value');
+      var data = snap.val() || {};
+      var list = Object.keys(data).map(function(k){ var v=data[k]; v.key=k; return v; })
+        .sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+      if (!list.length) {
+        el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3);">尚無推播<br><span style="font-size:0.75rem;">管理員可在上方發布</span></div>';
+        return;
+      }
+      var levelIcon = {info:'ℹ️', important:'⚠️', urgent:'🚨'};
+      var levelColor = {info:'#a0a0b0', important:'#f59e0b', urgent:'#ef4444'};
+      el.innerHTML = list.map(function(b){
+        return '<div style="padding:14px;margin-bottom:10px;border-radius:14px;border:1px solid rgba(255,255,255,0.07);background:rgba(255,255,255,0.03);border-left:4px solid '+(levelColor[b.level]||'#8b5cf6')+';">'
+          + '<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
+          + '<strong style="color:'+(levelColor[b.level]||'#a78bfa')+'">'+(levelIcon[b.level]||'ℹ️')+' '+esc(b.title||'')+'</strong>'
+          + '<span style="font-size:0.7rem;color:var(--text3);">'+(b.ts?new Date(b.ts).toLocaleString('zh-TW'):'')+'</span></div>'
+          + '<div style="font-size:0.88rem;line-height:1.6;margin-bottom:6px;">'+esc(b.body||'')+'</div>'
+          + '<div style="font-size:0.72rem;color:var(--text3);">由 '+esc(b.by||'')+' 發布'+(b.pin?' · 📌 置頂':'')+'</div></div>';
+      }).join('');
+    } catch(e) {
+      console.error(e);
+      el.innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444;">載入失敗</div>';
+    }
+  };
+
+  window.publishBroadcast = async function(){
+    var isAdmin = (window.profile && profile.nick === 'Lucas') || (typeof isAdminLike === 'function' && isAdminLike());
+    if (!isAdmin) { toast('只有管理員可發布','warn'); return; }
+    var title = (document.getElementById('bc-title')||{}).value||'';
+    var body = (document.getElementById('bc-body')||{}).value||'';
+    title = title.trim(); body = body.trim();
+    if (!title || !body) { toast('請填寫標題與內容','warn'); return; }
+    var level = (document.getElementById('bc-level')||{}).value||'info';
+    var pin = !!(document.getElementById('bc-pin')||{}).checked;
+    try {
+      await db.ref('broadcasts').push({
+        title: title, body: body, level: level, pin: pin,
+        by: (profile && profile.nick) || '管理員',
+        ts: Date.now()
+      });
+      if (pin) {
+        await db.ref('announce').set({ text: '【'+title+'】'+body, by: (profile&&profile.nick)||'', ts: Date.now(), level: level });
+      }
+      document.getElementById('bc-title').value = '';
+      document.getElementById('bc-body').value = '';
+      toast('📢 推播已發布','success');
+      window.loadBroadcasts();
+    } catch(e) {
+      console.error(e);
+      toast('發布失敗','error');
+    }
+  };
+
+  // ---------- 好友進階 ----------
+  window.openFriendExtra = function(){
+    if (!openM('friend-extra-modal')) return;
+    if (window.switchFriendExtra) window.switchFriendExtra('feed');
+    else {
+      var panel = document.getElementById('friend-extra-panel');
+      if (panel) panel.innerHTML = '<div style="padding:16px;color:var(--text3);">請稍候或重新整理後再試</div>';
+    }
+  };
+
+  // ---------- 帝國日報 ----------
+  window.openDailyReport = async function(){
+    if (!openM('daily-report-modal')) return;
+    var el = document.getElementById('daily-report-content');
+    if (!el) return;
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3);">產生今日日報中...</div>';
+    if (typeof db === 'undefined' || !db) {
+      el.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text3);">資料庫尚未連線</div>';
+      return;
+    }
+    try {
+      var today = new Date().toLocaleDateString('zh-TW');
+      var usersSnap = await db.ref('users').once('value');
+      var users = usersSnap.val() || {};
+      var userList = Object.keys(users).map(function(k){ return users[k]; });
+      var withDaily = userList.map(function(u){
+        return {
+          nick: u.nick || '未知',
+          daily: (u.dailyMsgs && u.dailyMsgs[today]) || 0,
+          total: u.msgCount || 0,
+          points: u.points || 0
+        };
+      }).sort(function(a,b){ return b.daily - a.daily; });
+      var top5 = withDaily.slice(0, 5);
+      var totalMsgsToday = withDaily.reduce(function(s,u){ return s + u.daily; }, 0);
+      var onlineSnap = await db.ref('presence').once('value');
+      var onlineCount = Object.keys(onlineSnap.val() || {}).length;
+
+      el.innerHTML = '<div style="text-align:center;margin-bottom:20px;">'
+        + '<div style="font-size:1.3rem;font-weight:900;color:var(--gold2);">📰 帝國日報</div>'
+        + '<div style="font-size:0.8rem;color:var(--text3);font-family:JetBrains Mono,monospace;">'+today+'</div></div>'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px;">'
+        + '<div style="background:rgba(255,255,255,0.04);padding:14px;border-radius:12px;text-align:center;border:1px solid rgba(255,255,255,0.07);">'
+        + '<div style="font-size:1.5rem;font-weight:900;color:var(--gold2);">'+totalMsgsToday+'</div>'
+        + '<div style="font-size:0.7rem;color:var(--text3);">今日總訊息</div></div>'
+        + '<div style="background:rgba(255,255,255,0.04);padding:14px;border-radius:12px;text-align:center;border:1px solid rgba(255,255,255,0.07);">'
+        + '<div style="font-size:1.5rem;font-weight:900;color:var(--purple2);">'+onlineCount+'</div>'
+        + '<div style="font-size:0.7rem;color:var(--text3);">目前在線</div></div></div>'
+        + '<div style="font-weight:700;margin-bottom:10px;">🏆 今日活躍排行</div>'
+        + (top5.map(function(u,i){
+            return '<div style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid rgba(255,255,255,0.06);">'
+              + '<span style="font-weight:900;width:24px;color:var(--gold2);">'+(i+1)+'</span>'
+              + '<span style="flex:1;font-weight:700;">'+esc(u.nick)+'</span>'
+              + '<span style="color:var(--text3);font-size:0.85rem;">'+u.daily+' 則</span></div>';
+          }).join('') || '<div style="color:var(--text3);">今日尚無發言</div>')
+        + '<div style="margin-top:18px;font-size:0.75rem;color:var(--text3);text-align:center;">— 大張帝國情報處 製 —</div>';
+    } catch(e) {
+      console.error(e);
+      el.innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444;">產生日報失敗</div>';
+    }
+  };
+
+  // 點遮罩關閉
+  document.addEventListener('click', function(e){
+    if (e.target && e.target.classList && e.target.classList.contains('modal-overlay') && e.target.classList.contains('open')) {
+      e.target.classList.remove('open');
+    }
+  });
+
+  // 尊重使用者主題設定（不再強制深色）
+  (function(){
+    var saved = localStorage.getItem('empire_dark');
+    if (saved === '0') document.body.classList.remove('dark-mode');
+    else document.body.classList.add('dark-mode');
+    var btn = document.getElementById('dark-btn');
+    if (btn) btn.textContent = document.body.classList.contains('dark-mode') ? '☀️' : '🌙';
+  })();
+
+  console.log('✅ v23 功能中心與可靠推播/日報已就緒');
+})();
+</script>
+
+
+<style id="empire-theme-fix">
+/* 亮色主題完整支援（移除 dark-mode 時生效） */
+body:not(.dark-mode) {
+  --bg0: #f3f1ee !important;
+  --bg1: #ffffff !important;
+  --bg2: #faf8f5 !important;
+  --bg3: #f0ece6 !important;
+  --glass: rgba(0,0,0,0.02) !important;
+  --glass2: rgba(0,0,0,0.04) !important;
+  --border: rgba(0,0,0,0.08) !important;
+  --border2: rgba(0,0,0,0.12) !important;
+  --text: #1c1929 !important;
+  --text2: #5c566e !important;
+  --text3: #9a94a8 !important;
+  --gold: #a07830 !important;
+  --gold2: #b8904a !important;
+  --gold3: #7a5820 !important;
+  --purple: #6b46d4 !important;
+  --purple2: #7c5cdf !important;
+  --shadow: 0 20px 50px rgba(0,0,0,0.1) !important;
+  background: #f3f1ee !important;
+  color: #1c1929 !important;
+}
+body:not(.dark-mode) #sidebar {
+  background: #ffffff !important;
+  border-right-color: rgba(0,0,0,0.08) !important;
+}
+body:not(.dark-mode) #topbar {
+  background: rgba(255,255,255,0.92) !important;
+  border-bottom-color: rgba(0,0,0,0.08) !important;
+}
+body:not(.dark-mode) #input-zone {
+  background: rgba(255,255,255,0.95) !important;
+  border-top-color: rgba(0,0,0,0.08) !important;
+}
+body:not(.dark-mode) .others .msg-bubble {
+  background: #ffffff !important;
+  border-color: rgba(0,0,0,0.1) !important;
+  color: #1c1929 !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important;
+}
+body:not(.dark-mode) .me .msg-bubble {
+  background: linear-gradient(145deg, rgba(124,92,223,0.28), rgba(90,61,184,0.22)) !important;
+  border-color: rgba(124,92,223,0.35) !important;
+  color: #1a1028 !important;
+}
+body:not(.dark-mode) .input-bar {
+  background: #f3f1ee !important;
+  border-color: rgba(0,0,0,0.1) !important;
+}
+body:not(.dark-mode) .modal-card {
+  background: #ffffff !important;
+  border-color: rgba(0,0,0,0.1) !important;
+  color: #1c1929 !important;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.15) !important;
+}
+body:not(.dark-mode) .modal-overlay {
+  background: rgba(0,0,0,0.4) !important;
+}
+body:not(.dark-mode) .sb-more-btn {
+  background: linear-gradient(135deg, rgba(107,70,212,0.15), rgba(90,61,184,0.12)) !important;
+  border-color: rgba(107,70,212,0.3) !important;
+  color: #4c1d95 !important;
+}
+body:not(.dark-mode) .ch-item.active {
+  background: linear-gradient(120deg, rgba(124,92,223,0.12), rgba(200,164,90,0.08)) !important;
+  color: #7a5820 !important;
+}
+body:not(.dark-mode) .fh-item {
+  background: rgba(0,0,0,0.02) !important;
+  border-color: rgba(0,0,0,0.08) !important;
+}
+body:not(.dark-mode) .fh-item:hover {
+  background: rgba(124,92,223,0.08) !important;
+  border-color: rgba(124,92,223,0.25) !important;
+}
+body:not(.dark-mode) .fh-name { color: #1c1929 !important; }
+body:not(.dark-mode) .topbar-title {
+  background: linear-gradient(90deg, #8a6a28, #b8904a) !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+}
+body:not(.dark-mode) .sb-footer .checkin-btn {
+  background: rgba(160,120,48,0.1) !important;
+  color: #8a6a28 !important;
+  border-color: rgba(160,120,48,0.25) !important;
+}
+body:not(.dark-mode) .feature-hub-card,
+body:not(.dark-mode) .modal-card {
+  background: #fff !important;
+}
+</style>
+
+<script>
+/* v23.1 Bug 修復：主題、刪除推播、功能完整性 */
+(function(){
+  'use strict';
+
+  function toast(msg, type){
+    if (typeof showToast === 'function') showToast(msg, type||'info');
+    else console.log('[toast]', msg);
+  }
+  function esc(s){
+    if (typeof window.esc === 'function') return window.esc(s);
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function openM(id){
+    var el = document.getElementById(id);
+    if (!el) { toast('面板不存在','error'); return false; }
+    el.classList.add('open');
+    return true;
+  }
+
+  // ----- 主題切換（覆蓋並修好） -----
+  window.toggleDarkMode = function(){
+    var isDark = document.body.classList.toggle('dark-mode');
+    localStorage.setItem('empire_dark', isDark ? '1' : '0');
+    var btn = document.getElementById('dark-btn');
+    if (btn) btn.textContent = isDark ? '☀️' : '🌙';
+    toast(isDark ? '🌙 暗色模式' : '☀️ 亮色模式', 'success');
+  };
+
+  // 啟動時依設定套用
+  (function applyTheme(){
+    var saved = localStorage.getItem('empire_dark');
+    if (saved === '0') {
+      document.body.classList.remove('dark-mode');
+    } else {
+      document.body.classList.add('dark-mode');
+    }
+    var btn = document.getElementById('dark-btn');
+    if (btn) btn.textContent = document.body.classList.contains('dark-mode') ? '☀️' : '🌙';
+  })();
+
+  // 功能中心的主題按鈕也走同一套
+  // （已由 openFeatureHub 的 theme action 呼叫 toggle，這裡強化）
+
+  // ----- 刪除推播 -----
+  window.deleteBroadcast = async function(key){
+    if (!key) return;
+    if (!confirm('確定刪除此推播？')) return;
+    try {
+      if (typeof db === 'undefined' || !db) { toast('資料庫未連線','error'); return; }
+      await db.ref('broadcasts/' + key).remove();
+      toast('已刪除推播','warn');
+      if (typeof window.loadBroadcasts === 'function') window.loadBroadcasts();
+    } catch(e) {
+      console.error(e);
+      toast('刪除失敗','error');
+    }
+  };
+
+  // ----- 重寫 loadBroadcasts：含刪除按鈕 -----
+  window.loadBroadcasts = async function(){
+    var el = document.getElementById('broadcast-list');
+    if (!el) return;
+    if (typeof db === 'undefined' || !db) {
+      el.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text3);">資料庫尚未連線</div>';
+      return;
+    }
+    try {
+      var snap = await db.ref('broadcasts').limitToLast(40).once('value');
+      var data = snap.val() || {};
+      var list = Object.keys(data).map(function(k){
+        var v = data[k] || {};
+        v.key = k;
+        return v;
+      }).sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+
+      if (!list.length) {
+        el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3);">尚無推播<br><span style="font-size:0.75rem;">管理員可在上方發布</span></div>';
+        return;
+      }
+
+      var isAdmin = (window.profile && profile.nick === 'Lucas') ||
+                    (typeof isAdminLike === 'function' && isAdminLike());
+      var levelIcon = {info:'ℹ️', important:'⚠️', urgent:'🚨'};
+      var levelColor = {info:'#a0a0b0', important:'#f59e0b', urgent:'#ef4444'};
+
+      el.innerHTML = list.map(function(b){
+        var delBtn = isAdmin
+          ? '<button type="button" onclick="window.deleteBroadcast(\''+b.key+'\')" style="margin-top:8px;font-size:0.75rem;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);color:#ef4444;padding:5px 12px;border-radius:8px;cursor:pointer;font-weight:700;">🗑️ 刪除</button>'
+          : '';
+        return '<div style="padding:14px;margin-bottom:10px;border-radius:14px;border:1px solid var(--border);background:var(--bg2);border-left:4px solid '+(levelColor[b.level]||'var(--purple)')+';">'
+          + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;">'
+          + '<strong style="color:'+(levelColor[b.level]||'var(--purple2)')+'">'+(levelIcon[b.level]||'ℹ️')+' '+esc(b.title||'')+'</strong>'
+          + '<span style="font-size:0.7rem;color:var(--text3);white-space:nowrap;">'+(b.ts?new Date(b.ts).toLocaleString('zh-TW'):'')+'</span></div>'
+          + '<div style="font-size:0.88rem;line-height:1.6;margin-bottom:6px;">'+esc(b.body||'')+'</div>'
+          + '<div style="font-size:0.72rem;color:var(--text3);">由 '+esc(b.by||'')+' 發布'+(b.pin?' · 📌 置頂':'')+'</div>'
+          + delBtn + '</div>';
+      }).join('');
+    } catch(e) {
+      console.error(e);
+      el.innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444;">載入失敗</div>';
+    }
+  };
+
+  // ----- 確保 openBroadcastHub 用新的 loadBroadcasts -----
+  window.openBroadcastHub = function(){
+    if (!openM('broadcast-hub-modal')) return;
+    var compose = document.getElementById('broadcast-compose');
+    var isAdmin = (window.profile && profile.nick === 'Lucas') ||
+                  (typeof isAdminLike === 'function' && isAdminLike());
+    if (compose) compose.style.display = isAdmin ? 'block' : 'none';
+    window.loadBroadcasts();
+  };
+
+  // ----- 好友進階：若 switchFriendExtra 缺失則補簡易版 -----
+  if (typeof window.switchFriendExtra !== 'function') {
+    window.switchFriendExtra = async function(tab){
+      ['feed','groups','birthday'].forEach(function(t){
+        var el = document.getElementById('fe-tab-'+t);
+        if (el) el.classList.toggle('active', t===tab);
+      });
+      var panel = document.getElementById('friend-extra-panel');
+      if (!panel) return;
+      if (tab === 'feed') {
+        panel.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text3);">載入好友動態...</div>';
+        try {
+          if (!currentUser || !db) { panel.innerHTML = '<div style="padding:20px;color:var(--text3);">請先登入</div>'; return; }
+          var friendsSnap = await db.ref('friends/'+ (typeof safeKey==='function'?safeKey(currentUser.uid):currentUser.uid)).once('value');
+          var friends = friendsSnap.val() || {};
+          var entries = Object.keys(friends).map(function(k){ return friends[k]; });
+          if (!entries.length) {
+            panel.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3);">尚無好友</div>';
+            return;
+          }
+          var presSnap = await db.ref('presence').once('value');
+          var presence = presSnap.val() || {};
+          var byUid = {};
+          Object.keys(presence).forEach(function(k){
+            var p = presence[k];
+            if (p && p.uid) byUid[p.uid] = p;
+          });
+          panel.innerHTML = entries.map(function(f){
+            var pres = byUid[f.uid];
+            var st = pres ? (pres.myStatus||'online') : 'offline';
+            var label = ({online:'🟢 在線',away:'🟡 離開',busy:'🔴 忙碌',offline:'⚫ 離線'})[st]||'⚫ 離線';
+            return '<div style="padding:12px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;">'
+              + '<div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--purple),#4f46e5);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;">'+(f.nick||'?')[0]+'</div>'
+              + '<div style="flex:1;"><div style="font-weight:700;">'+esc(f.nick||'?')+'</div>'
+              + '<div style="font-size:0.78rem;color:var(--text3);">'+label+'</div></div>'
+              + '<button class="fr-act-btn msg" onclick="closeModal(\'friend-extra-modal\');openDmWindow(\''+f.uid+'\',\''+esc(f.nick||'')+'\',\'\')">私訊</button></div>';
+          }).join('');
+        } catch(e) {
+          console.error(e);
+          panel.innerHTML = '<div style="padding:20px;color:#ef4444;">載入失敗</div>';
+        }
+      } else if (tab === 'groups') {
+        panel.innerHTML = '<div style="padding:16px;color:var(--text3);">好友分組功能可在此管理。<br>可至側邊欄好友管理新增好友後再分組。</div>';
+      } else if (tab === 'birthday') {
+        panel.innerHTML = '<div style="padding:16px;">'
+          + '<input class="auth-input" id="bd-nick" placeholder="好友暱稱" style="margin-bottom:8px;">'
+          + '<input class="auth-input" id="bd-date" type="date" style="margin-bottom:8px;">'
+          + '<button class="auth-btn" style="width:auto;padding:8px 14px;" onclick="window.saveBirthday && window.saveBirthday()">儲存生日</button>'
+          + '<div id="bd-list" style="margin-top:14px;"></div></div>';
+        if (window.renderBirthdayList) window.renderBirthdayList();
+      }
+    };
+  }
+
+  window.saveBirthday = function(){
+    var nick = (document.getElementById('bd-nick')||{}).value;
+    var date = (document.getElementById('bd-date')||{}).value;
+    if (!nick || !date) { toast('請填寫暱稱與日期','warn'); return; }
+    nick = nick.trim();
+    var stored = {};
+    try { stored = JSON.parse(localStorage.getItem('empire_birthdays')||'{}'); } catch(e){}
+    stored[nick] = date;
+    localStorage.setItem('empire_birthdays', JSON.stringify(stored));
+    toast('🎂 生日已儲存','success');
+    window.renderBirthdayList && window.renderBirthdayList();
+  };
+
+  window.renderBirthdayList = function(){
+    var el = document.getElementById('bd-list');
+    if (!el) return;
+    var stored = {};
+    try { stored = JSON.parse(localStorage.getItem('empire_birthdays')||'{}'); } catch(e){}
+    var keys = Object.keys(stored);
+    if (!keys.length) { el.innerHTML = '<div style="color:var(--text3);">尚無紀錄</div>'; return; }
+    var today = new Date();
+    var md = String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+    el.innerHTML = keys.map(function(nick){
+      var date = stored[nick];
+      var isToday = date && date.slice(5) === md;
+      return '<div style="padding:10px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;">'
+        + '<span>'+(isToday?'🎂 ':'')+esc(nick)+' · '+esc(date)+'</span>'
+        + (isToday?'<span style="color:var(--gold2);font-weight:700;">今天生日！</span>':'')
+        + '</div>';
+    }).join('');
+  };
+
+  window.openFriendExtra = function(){
+    if (!openM('friend-extra-modal')) return;
+    window.switchFriendExtra('feed');
+  };
+
+  // 綁定好友進階分頁點擊
+  document.addEventListener('click', function(e){
+    var t = e.target;
+    if (!t || !t.id) return;
+    if (t.id === 'fe-tab-feed') window.switchFriendExtra('feed');
+    if (t.id === 'fe-tab-groups') window.switchFriendExtra('groups');
+    if (t.id === 'fe-tab-birthday') window.switchFriendExtra('birthday');
+  });
+
+  // ----- 群組列表簡易保底 -----
+  if (typeof window.loadGroupList !== 'function') {
+    window.loadGroupList = async function(){
+      var el = document.getElementById('group-list');
+      if (!el) return;
+      if (!currentUser || !db) {
+        el.innerHTML = '<div style="text-align:center;color:var(--text3);padding:24px;">請先登入</div>';
+        return;
+      }
+      try {
+        var snap = await db.ref('groups').once('value');
+        var all = snap.val() || {};
+        var sk = typeof safeKey === 'function' ? safeKey(currentUser.uid) : currentUser.uid;
+        var myGroups = Object.keys(all).filter(function(id){
+          return all[id].members && all[id].members[sk];
+        }).map(function(id){ return {id:id, g:all[id]}; });
+        if (!myGroups.length) {
+          el.innerHTML = '<div style="text-align:center;color:var(--text3);padding:24px;">你還沒有加入任何群組</div>';
+          return;
+        }
+        el.innerHTML = myGroups.map(function(item){
+          var g = item.g;
+          var count = Object.keys(g.members||{}).length;
+          return '<div class="fr-row"><div class="fr-av" style="background:linear-gradient(135deg,#0d9488,#0f766e)">👥</div>'
+            + '<div class="fr-info"><div class="fr-name">'+esc(g.name||'未命名')+'</div>'
+            + '<div class="fr-sub">'+count+' 位成員</div></div></div>';
+        }).join('');
+      } catch(e) {
+        console.error(e);
+        el.innerHTML = '<div style="padding:20px;color:#ef4444;">載入失敗</div>';
+      }
+    };
+  }
+
+  // 功能中心 theme 改呼叫 toggleDarkMode
+  // 已在 v23 的 click handler 裡，再覆蓋一次更穩
+  var _fhHandlerDone = false;
+  document.addEventListener('click', function(e){
+    var item = e.target.closest && e.target.closest('.fh-item[data-action="theme"]');
+    if (!item) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof closeModal === 'function') closeModal('feature-hub-modal');
+    setTimeout(function(){ window.toggleDarkMode(); }, 100);
+  }, true);
+
+  console.log('✅ v23.1 修復完成：主題切換 / 刪除推播 / 功能保底');
+})();
+</script>
+
+
+<style id="v24-fixes">
+/* 設定 / 所有 Modal 可下滑 */
+.modal-card {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  max-height: 88vh !important;
+  -webkit-overflow-scrolling: touch;
+}
+.modal-card::-webkit-scrollbar {
+  width: 6px !important;
+}
+.modal-card::-webkit-scrollbar-thumb {
+  background: rgba(139,92,246,0.4) !important;
+  border-radius: 6px !important;
+}
+.modal-card::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.1) !important;
+}
+#profile-modal .modal-card {
+  width: 440px !important;
+  max-width: 94vw !important;
+  padding: 28px 28px 32px !important;
+}
+body:not(.dark-mode) .modal-card::-webkit-scrollbar-thumb {
+  background: rgba(107,70,212,0.35) !important;
+}
+
+/* 公告列可關閉且樣式清楚 */
+#announce-bar {
+  cursor: default;
+}
+#announce-bar .announce-clear-admin {
+  font-size: 0.7rem;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(239,68,68,0.4);
+  background: rgba(239,68,68,0.12);
+  color: #ef4444;
+  cursor: pointer;
+  margin-left: 6px;
+}
+</style>
+
+<script>
+/* v24：設定可捲動、刪廣播同步清置頂、新功能 */
+(function(){
+  'use strict';
+
+  function toast(msg, type){
+    if (typeof showToast === 'function') showToast(msg, type||'info');
+    else console.log(msg);
+  }
+  function esc(s){
+    if (typeof window.esc === 'function') return window.esc(s);
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ========== 1. 刪除推播時同步清除聊天室置頂公告 ==========
+  window.deleteBroadcast = async function(key){
+    if (!key) return;
+    if (!confirm('確定刪除此推播？')) return;
+    try {
+      if (typeof db === 'undefined' || !db) { toast('資料庫未連線','error'); return; }
+
+      // 讀取要刪的內容，若與目前 announce 相同則一併清除
+      var snap = await db.ref('broadcasts/' + key).once('value');
+      var item = snap.val();
+      await db.ref('broadcasts/' + key).remove();
+
+      if (item) {
+        var annSnap = await db.ref('announce').once('value');
+        var ann = annSnap.val();
+        if (ann && ann.text) {
+          var expected = '【' + (item.title||'') + '】' + (item.body||'');
+          // 標題匹配或全文包含則清除置頂
+          if (ann.text === expected || ann.text.indexOf(item.title||'') !== -1 || item.pin) {
+            // 檢查是否還有其他置頂推播
+            var allSnap = await db.ref('broadcasts').once('value');
+            var all = allSnap.val() || {};
+            var otherPinned = null;
+            Object.keys(all).forEach(function(k){
+              if (all[k] && all[k].pin) otherPinned = all[k];
+            });
+            if (otherPinned) {
+              await db.ref('announce').set({
+                text: '【'+(otherPinned.title||'')+'】'+(otherPinned.body||''),
+                by: otherPinned.by || '',
+                ts: otherPinned.ts || Date.now(),
+                level: otherPinned.level || 'info'
+              });
+            } else {
+              await db.ref('announce').remove();
+              // 立刻隱藏本地公告列
+              var bar = document.getElementById('announce-bar');
+              if (bar) bar.classList.remove('show');
+              var txt = document.getElementById('announce-text');
+              if (txt) txt.textContent = '尚無公告';
+            }
+          }
+        }
+      }
+
+      toast('已刪除推播','warn');
+      if (typeof window.loadBroadcasts === 'function') window.loadBroadcasts();
+    } catch(e) {
+      console.error(e);
+      toast('刪除失敗','error');
+    }
+  };
+
+  // 管理員可一鍵清除置頂公告
+  window.clearAnnounceBar = async function(){
+    if (!confirm('確定清除聊天室頂部公告？')) return;
+    try {
+      await db.ref('announce').remove();
+      var bar = document.getElementById('announce-bar');
+      if (bar) bar.classList.remove('show');
+      toast('頂部公告已清除','success');
+    } catch(e) {
+      toast('清除失敗','error');
+    }
+  };
+
+  // 在公告列加入「清除」按鈕（僅管理員）
+  function enhanceAnnounceBar(){
+    var bar = document.getElementById('announce-bar');
+    if (!bar || bar.querySelector('.announce-clear-admin')) return;
+    var btn = document.createElement('button');
+    btn.className = 'announce-clear-admin';
+    btn.type = 'button';
+    btn.textContent = '清除公告';
+    btn.style.display = 'none';
+    btn.onclick = function(){ window.clearAnnounceBar(); };
+    var closeBtn = bar.querySelector('.announce-close');
+    if (closeBtn) bar.insertBefore(btn, closeBtn);
+    else bar.appendChild(btn);
+    // 顯示條件
+    setInterval(function(){
+      var isAdmin = (window.profile && profile.nick === 'Lucas') ||
+                    (typeof isAdminLike === 'function' && isAdminLike());
+      btn.style.display = isAdmin ? 'inline-block' : 'none';
+    }, 2000);
+  }
+
+  // ========== 2. 設定 Modal 強制可捲動 ==========
+  function fixProfileScroll(){
+    var card = document.querySelector('#profile-modal .modal-card');
+    if (card) {
+      card.style.overflowY = 'auto';
+      card.style.maxHeight = '88vh';
+      card.style.webkitOverflowScrolling = 'touch';
+    }
+  }
+  var _op = window.openProfileModal;
+  if (typeof _op === 'function') {
+    window.openProfileModal = function(){
+      _op.apply(this, arguments);
+      setTimeout(fixProfileScroll, 50);
+    };
+  }
+  // 任何 modal 開啟時也確保可捲
+  document.addEventListener('click', function(){
+    setTimeout(function(){
+      document.querySelectorAll('.modal-overlay.open .modal-card').forEach(function(card){
+        card.style.overflowY = 'auto';
+        card.style.maxHeight = '88vh';
+      });
+    }, 30);
+  });
+
+  // ========== 3. 新功能 ==========
+
+  // 3a. 個人備忘錄（本機）
+  window.openPersonalMemo = function(){
+    var memo = localStorage.getItem('empire_memo') || '';
+    var html = '<div style="padding:8px 0;">'
+      + '<textarea id="personal-memo-input" class="auth-input" rows="8" placeholder="寫下你的帝國備忘…" style="resize:vertical;min-height:160px;">'+esc(memo).replace(/&quot;/g,'"')+'</textarea>'
+      + '<button class="auth-btn" style="margin-top:12px;" onclick="window.savePersonalMemo()">儲存備忘錄</button>'
+      + '</div>';
+    // 用簡易 modal
+    var existing = document.getElementById('memo-modal');
+    if (existing) existing.remove();
+    var wrap = document.createElement('div');
+    wrap.id = 'memo-modal';
+    wrap.className = 'modal-overlay open';
+    wrap.innerHTML = '<div class="modal-card" style="width:420px;max-width:94vw;"><div class="modal-header"><span class="modal-title">📝 個人備忘錄</span><button class="modal-close" onclick="document.getElementById(\'memo-modal\').remove()">✕</button></div>'+html+'</div>';
+    document.body.appendChild(wrap);
+    wrap.onclick = function(e){ if(e.target===wrap) wrap.remove(); };
+  };
+  window.savePersonalMemo = function(){
+    var v = (document.getElementById('personal-memo-input')||{}).value || '';
+    localStorage.setItem('empire_memo', v);
+    toast('📝 備忘錄已儲存','success');
+  };
+
+  // 3b. 草稿自動儲存
+  (function setupDraft(){
+    function bind(){
+      var input = document.getElementById('msgInput');
+      if (!input || input._draftBound) return;
+      input._draftBound = true;
+      var key = 'empire_draft';
+      try {
+        var saved = localStorage.getItem(key);
+        if (saved && !input.value) input.value = saved;
+      } catch(e){}
+      input.addEventListener('input', function(){
+        try { localStorage.setItem(key, input.value || ''); } catch(e){}
+      });
+    }
+    setInterval(bind, 2000);
+    // 送出後清草稿：hook
+    var tries = 0;
+    var t = setInterval(function(){
+      tries++;
+      if (typeof window.sendMsg === 'function') {
+        clearInterval(t);
+        var orig = window.sendMsg;
+        window.sendMsg = function(){
+          var r = orig.apply(this, arguments);
+          try { localStorage.setItem('empire_draft',''); } catch(e){}
+          return r;
+        };
+      }
+      if (tries > 30) clearInterval(t);
+    }, 500);
+  })();
+
+  // 3c. 頂部時鐘
+  function ensureClock(){
+    var right = document.querySelector('.topbar-right');
+    if (!right || document.getElementById('empire-clock')) return;
+    var clock = document.createElement('span');
+    clock.id = 'empire-clock';
+    clock.style.cssText = 'font-family:JetBrains Mono,monospace;font-size:0.72rem;color:var(--text3);margin-right:8px;letter-spacing:0.5px;';
+    right.insertBefore(clock, right.firstChild);
+    function tick(){
+      var d = new Date();
+      clock.textContent = d.toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    }
+    tick();
+    setInterval(tick, 1000);
+  }
+
+  // 3d. 訊息精簡模式（更緊湊）
+  window.toggleCompactMode = function(){
+    var on = document.body.classList.toggle('compact-msg');
+    localStorage.setItem('empire_compact', on ? '1' : '0');
+    toast(on ? '📦 精簡模式已開啟' : '📦 精簡模式已關閉','success');
+  };
+  if (localStorage.getItem('empire_compact') === '1') {
+    document.body.classList.add('compact-msg');
+  }
+
+  // 3e. 一鍵回頂 / 回底 已有，加強：雙擊頂部標題回頂
+  var title = document.getElementById('ch-name-display');
+  if (title) {
+    title.style.cursor = 'pointer';
+    title.title = '雙擊回到頂部';
+    title.addEventListener('dblclick', function(){
+      var c = document.getElementById('msg-container');
+      if (c) c.scrollTop = 0;
+    });
+  }
+
+  // 3f. 把新功能加入功能中心
+  function injectFeatureHubItems(){
+    var grid = document.querySelector('.feature-hub-grid');
+    if (!grid || grid.querySelector('[data-action="memo"]')) return;
+    var items = [
+      {action:'memo', icon:'📝', name:'個人備忘錄', desc:'私密筆記（本機）'},
+      {action:'compact', icon:'📦', name:'精簡訊息', desc:'切換緊湊顯示'},
+      {action:'clearann', icon:'🧹', name:'清除頂部公告', desc:'管理員專用'}
+    ];
+    items.forEach(function(it){
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'fh-item';
+      btn.setAttribute('data-action', it.action);
+      btn.innerHTML = '<span class="fh-icon">'+it.icon+'</span><span class="fh-name">'+it.name+'</span><span class="fh-desc">'+it.desc+'</span>';
+      grid.appendChild(btn);
+    });
+  }
+
+  // 功能中心點擊擴充
+  document.addEventListener('click', function(e){
+    var item = e.target.closest && e.target.closest('.fh-item');
+    if (!item) return;
+    var action = item.getAttribute('data-action');
+    if (action === 'memo') {
+      if (typeof closeModal === 'function') closeModal('feature-hub-modal');
+      setTimeout(function(){ window.openPersonalMemo(); }, 150);
+    } else if (action === 'compact') {
+      if (typeof closeModal === 'function') closeModal('feature-hub-modal');
+      setTimeout(function(){ window.toggleCompactMode(); }, 100);
+    } else if (action === 'clearann') {
+      if (typeof closeModal === 'function') closeModal('feature-hub-modal');
+      setTimeout(function(){ window.clearAnnounceBar(); }, 100);
+    }
+  });
+
+  // 啟動
+  setTimeout(function(){
+    enhanceAnnounceBar();
+    ensureClock();
+    injectFeatureHubItems();
+    fixProfileScroll();
+  }, 800);
+
+  console.log('✅ v24：設定可捲動 / 刪廣播清置頂 / 新功能');
+})();
+</script>
+
+<style>
+/* 精簡訊息模式 */
+body.compact-msg .msg-group { margin: 1px 0 !important; }
+body.compact-msg .msg-bubble { padding: 7px 12px !important; font-size: 0.84rem !important; }
+body.compact-msg .msg-av { width: 26px !important; height: 26px !important; }
+body.compact-msg .msg-meta { font-size: 0.58rem !important; }
+body.compact-msg #msg-container { gap: 0 !important; }
+</style>
+
+
+<style id="v25-admin-ui">
+/* 管理員面板收納式分頁 */
+#admin-panel-modal .modal-card {
+  width: min(920px, 96vw) !important;
+  max-height: 90vh !important;
+  padding: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+#admin-panel-modal .modal-header {
+  padding: 16px 20px !important;
+  margin: 0 !important;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+.admin-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow-x: auto;
+  background: rgba(0,0,0,0.15);
+}
+.admin-tab {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text2);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  transition: all 0.2s;
+}
+.admin-tab:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+.admin-tab.active {
+  background: linear-gradient(135deg, rgba(220,38,38,0.25), rgba(153,27,27,0.2));
+  border-color: rgba(220,38,38,0.4);
+  color: #fecaca;
+}
+.admin-body {
+  flex: 1;
+  overflow-y: auto !important;
+  padding: 16px 20px 24px;
+  -webkit-overflow-scrolling: touch;
+}
+.admin-body::-webkit-scrollbar { width: 6px; }
+.admin-body::-webkit-scrollbar-thumb { background: rgba(220,38,38,0.35); border-radius: 6px; }
+
+.admin-god-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.admin-god-card {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 12px;
+  text-align: center;
+}
+.admin-god-num {
+  font-family: 'Syne', sans-serif;
+  font-weight: 900;
+  font-size: 1.4rem;
+  color: var(--gold2);
+}
+.admin-god-label {
+  font-size: 0.68rem;
+  color: var(--text3);
+  margin-top: 4px;
+  letter-spacing: 0.5px;
+}
+.admin-user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.admin-user-av {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 800; font-size: 0.85rem; flex-shrink: 0;
+}
+.admin-user-info { flex: 1; min-width: 120px; }
+.admin-user-name { font-weight: 700; font-size: 0.9rem; }
+.admin-user-meta { font-size: 0.72rem; color: var(--text3); }
+.admin-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.adm-btn {
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.05);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.adm-btn.ban { border-color: rgba(239,68,68,0.4); color: #fca5a5; background: rgba(239,68,68,0.1); }
+.adm-btn.unban { border-color: rgba(34,197,94,0.4); color: #86efac; background: rgba(34,197,94,0.1); }
+.adm-btn.kick { border-color: rgba(245,158,11,0.4); color: #fcd34d; background: rgba(245,158,11,0.1); }
+.adm-btn.mute { border-color: rgba(139,92,246,0.4); color: #c4b5fd; background: rgba(139,92,246,0.1); }
+
+/* 側邊欄更乾淨 */
+.sb-footer { gap: 6px !important; }
+#admin-panel-btn {
+  border-radius: 12px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.5px;
+}
+</style>
+
+<script>
+/* ============================================================
+   v25 管理員系統重做 — 僅 Lucas + 可用的上帝視角
+   ============================================================ */
+(function(){
+  'use strict';
+
+  function toast(msg, type){
+    if (typeof showToast === 'function') showToast(msg, type||'info');
+    else console.log(msg);
+  }
+  function esc(s){
+    if (typeof window.esc === 'function') return window.esc(s);
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function sk(uid){
+    if (typeof safeKey === 'function') return safeKey(uid);
+    return String(uid||'').replace(/[.#$\/\[\]]/g,'_');
+  }
+
+  // 嚴格：只有暱稱 Lucas
+  window.isAdminLike = function(){
+    return !!(window.profile && profile.nick === 'Lucas');
+  };
+  function requireLucas(){
+    if (!window.isAdminLike()) {
+      toast('🚫 僅皇帝 Lucas 可使用管理員功能','error');
+      return false;
+    }
+    return true;
+  }
+
+  // 顯示/隱藏側邊欄管理員按鈕
+  function syncAdminBtn(){
+    var btn = document.getElementById('admin-panel-btn');
+    if (!btn) return;
+    btn.style.display = window.isAdminLike() ? 'block' : 'none';
+  }
+  setInterval(syncAdminBtn, 1500);
+
+  // ----- 上帝視角資料 -----
+  window.adminCache = window.adminCache || { users:{}, presence:{}, banned:{}, muted:{} };
+
+  window.refreshAdminDashboard = async function(){
+    if (!requireLucas()) return;
+    if (typeof db === 'undefined' || !db) return;
+    try {
+      var results = await Promise.all([
+        db.ref('users').once('value'),
+        db.ref('presence').once('value'),
+        db.ref('blacklist').once('value'),
+        db.ref('mutes').once('value')
+      ]);
+      adminCache.users = results[0].val() || {};
+      adminCache.presence = results[1].val() || {};
+      adminCache.banned = results[2].val() || {};
+      adminCache.muted = results[3].val() || {};
+
+      var onlineCount = Object.keys(adminCache.presence).length;
+      var userCount = Object.keys(adminCache.users).length;
+      var mutedCount = Object.keys(adminCache.muted).filter(function(k){ return adminCache.muted[k]; }).length;
+      var bannedCount = Object.keys(adminCache.banned).filter(function(k){ return adminCache.banned[k]; }).length;
+
+      var set = function(id, val){
+        var el = document.getElementById(id);
+        if (el) el.textContent = val;
+      };
+      set('god-online', onlineCount);
+      set('god-users', userCount);
+      set('mon-online-val', onlineCount);
+      set('mon-peak-val', Math.max(onlineCount, parseInt(document.getElementById('mon-peak-val')?.textContent||'0',10)||0));
+      set('mon-total-val', userCount);
+
+      // 延遲
+      if (currentUser) {
+        var t0 = performance.now();
+        try {
+          var pref = db.ref('latencyPings/'+sk(currentUser.uid)).push();
+          await pref.set(Date.now());
+          await pref.remove();
+          set('god-latency', Math.round(performance.now()-t0)+'ms');
+        } catch(e){ set('god-latency', '--'); }
+      }
+
+      // 用戶表（上帝視角）
+      renderGodUserTable();
+      renderAdminUserList();
+      if (typeof refreshAnonList === 'function') {
+        try { refreshAnonList(); } catch(e){}
+      }
+    } catch(e) {
+      console.error('refreshAdminDashboard', e);
+      toast('監控資料載入失敗','error');
+    }
+  };
+
+  function findPresence(uid){
+    var p = adminCache.presence || {};
+    var keys = Object.keys(p);
+    for (var i=0;i<keys.length;i++){
+      if (p[keys[i]] && p[keys[i]].uid === uid) return p[keys[i]];
+    }
+    return null;
+  }
+
+  function renderGodUserTable(){
+    var tbody = document.getElementById('mon-user-table-body');
+    if (!tbody) return;
+    var users = adminCache.users || {};
+    var rows = Object.keys(users).map(function(uid){
+      var u = users[uid] || {};
+      var pres = findPresence(uid);
+      var st = pres ? (pres.myStatus||'online') : 'offline';
+      var metrics = (pres && pres.metrics) || u.metrics || {};
+      return '<tr>'
+        + '<td><strong>'+esc(u.nick||'?')+'</strong><br><span style="opacity:0.6;font-size:0.65rem;">'+st+'</span></td>'
+        + '<td>'+esc(metrics.country||'—')+' · '+esc(metrics.city||'')+'</td>'
+        + '<td>'+esc(metrics.os||'—')+' / '+esc(metrics.browser||'')+'</td>'
+        + '<td>'+(u.msgCount||0)+' 則 · '+(u.points||0)+' 分</td>'
+        + '<td>'+(metrics.lastLogin ? new Date(metrics.lastLogin).toLocaleString('zh-TW') : '—')+'</td>'
+        + '</tr>';
+    }).join('');
+    tbody.innerHTML = rows || '<tr><td colspan="5" style="text-align:center;color:var(--text3);">無用戶資料</td></tr>';
+  }
+
+  function renderAdminUserList(){
+    var list = document.getElementById('admin-user-list');
+    if (!list) return;
+    var q = ((document.getElementById('admin-user-search')||{}).value||'').trim().toLowerCase();
+    var users = adminCache.users || {};
+    var html = '';
+    Object.keys(users).forEach(function(uid){
+      var u = users[uid] || {};
+      var nick = u.nick || '?';
+      if (q && (nick+uid+(u.email||'')).toLowerCase().indexOf(q) === -1) return;
+      var isBanned = !!(adminCache.banned[sk(uid)]);
+      var isMuted = !!(adminCache.muted[sk(uid)]);
+      var pres = findPresence(uid);
+      var st = pres ? (pres.myStatus||'online') : 'offline';
+      var letter = nick.charAt(0).toUpperCase();
+      html += '<div class="admin-user-row">'
+        + '<div class="admin-user-av" style="background:linear-gradient(135deg,var(--purple),#4f46e5)">'+letter+'</div>'
+        + '<div class="admin-user-info">'
+        + '<div class="admin-user-name">'+esc(nick)+(isBanned?' <span style="color:#ef4444;">[封鎖]</span>':'')+(isMuted?' <span style="color:#f59e0b;">[禁言]</span>':'')+'</div>'
+        + '<div class="admin-user-meta">'+st+' · '+(u.msgCount||0)+' 則 · '+(u.points||0)+' 分</div></div>'
+        + '<div class="admin-actions">'
+        + (isMuted
+            ? '<button class="adm-btn mute" onclick="window.adminToggleMute(\''+uid+'\',\''+esc(nick)+'\',false)">解禁</button>'
+            : '<button class="adm-btn mute" onclick="window.adminToggleMute(\''+uid+'\',\''+esc(nick)+'\',true)">禁言</button>')
+        + '<button class="adm-btn kick" onclick="window.adminKick(\''+uid+'\',\''+esc(nick)+'\')">踢出</button>'
+        + (isBanned
+            ? '<button class="adm-btn unban" onclick="window.adminUnban(\''+uid+'\',\''+esc(nick)+'\')">解封</button>'
+            : '<button class="adm-btn ban" onclick="window.adminBan(\''+uid+'\',\''+esc(nick)+'\')">封鎖</button>')
+        + '</div></div>';
+    });
+    list.innerHTML = html || '<div class="admin-note" style="text-align:center;padding:20px;">找不到用戶</div>';
+  }
+
+  // 管理操作
+  window.adminBan = async function(uid, nick){
+    if (!requireLucas()) return;
+    if (!confirm('確定封鎖 '+nick+'？')) return;
+    await db.ref('blacklist/'+sk(uid)).set(true);
+    toast('🚫 已封鎖 '+nick,'warn');
+    window.refreshAdminDashboard();
+  };
+  window.adminUnban = async function(uid, nick){
+    if (!requireLucas()) return;
+    await db.ref('blacklist/'+sk(uid)).remove();
+    toast('✅ 已解封 '+nick,'success');
+    window.refreshAdminDashboard();
+  };
+  window.adminToggleMute = async function(uid, nick, shouldMute){
+    if (!requireLucas()) return;
+    if (shouldMute) {
+      await db.ref('mutes/'+sk(uid)).set(true);
+      toast('🔇 已禁言 '+nick,'warn');
+    } else {
+      await db.ref('mutes/'+sk(uid)).remove();
+      toast('✅ 已解除禁言 '+nick,'success');
+    }
+    window.refreshAdminDashboard();
+  };
+  window.adminKick = async function(uid, nick){
+    if (!requireLucas()) return;
+    if (!confirm('確定踢出 '+nick+'？')) return;
+    await db.ref('adminCommands/'+sk(uid)).push({cmd:'kick', from:'Lucas', ts:Date.now()});
+    // 嘗試移除 presence
+    var pres = adminCache.presence || {};
+    Object.keys(pres).forEach(function(k){
+      if (pres[k] && pres[k].uid === uid) db.ref('presence/'+k).remove();
+    });
+    toast('⛔ 已踢出 '+nick,'warn');
+    window.refreshAdminDashboard();
+  };
+
+  // ----- 管理員面板開啟（唯一入口） -----
+  var adminTimer = null;
+
+  window.openAdminPanel = function(){
+    if (!requireLucas()) return;
+
+    // 確保面板有分頁結構
+    ensureAdminTabsUI();
+
+    if (typeof openModal === 'function') openModal('admin-panel-modal');
+    else {
+      var m = document.getElementById('admin-panel-modal');
+      if (m) m.classList.add('open');
+    }
+
+    window.refreshAdminDashboard();
+    switchAdminTab('god');
+
+    if (adminTimer) clearInterval(adminTimer);
+    adminTimer = setInterval(function(){
+      var m = document.getElementById('admin-panel-modal');
+      if (m && m.classList.contains('open')) window.refreshAdminDashboard();
+      else clearInterval(adminTimer);
+    }, 6000);
+  };
+
+  function ensureAdminTabsUI(){
+    var modal = document.getElementById('admin-panel-modal');
+    if (!modal) return;
+    var card = modal.querySelector('.modal-card');
+    if (!card) return;
+    if (card.querySelector('.admin-tabs')) return; // already done
+
+    // Wrap existing content
+    var header = card.querySelector('.modal-header');
+    var children = Array.prototype.slice.call(card.children);
+    var body = document.createElement('div');
+    body.className = 'admin-body';
+    body.id = 'admin-body-content';
+
+    children.forEach(function(ch){
+      if (ch === header) return;
+      body.appendChild(ch);
+    });
+
+    var tabs = document.createElement('div');
+    tabs.className = 'admin-tabs';
+    tabs.innerHTML =
+      '<button type="button" class="admin-tab active" data-atab="god">👁️ 上帝視角</button>'+
+      '<button type="button" class="admin-tab" data-atab="users">👥 用戶管理</button>'+
+      '<button type="button" class="admin-tab" data-atab="gate">🛡️ 清道夫</button>'+
+      '<button type="button" class="admin-tab" data-atab="announce">📢 公告推播</button>'+
+      '<button type="button" class="admin-tab" data-atab="pending">📋 待審申請</button>';
+
+    if (header && header.nextSibling) {
+      card.insertBefore(tabs, header.nextSibling);
+    } else {
+      card.appendChild(tabs);
+    }
+    card.appendChild(body);
+
+    // mark sections for tab switching
+    body.querySelectorAll(':scope > .admin-section, :scope > div').forEach(function(sec, i){
+      sec.setAttribute('data-admin-section', 'legacy-'+i);
+    });
+
+    // God view section
+    var godPro = document.getElementById('godview-monitor-pro');
+    if (godPro) godPro.setAttribute('data-admin-panel', 'god');
+    var gate = document.getElementById('admin-gatekeeper-section');
+    if (gate) gate.setAttribute('data-admin-panel', 'gate');
+    var pending = document.getElementById('admin-pending-list');
+    if (pending && pending.closest) {
+      var psec = pending.closest('.admin-section') || pending.parentElement;
+      if (psec) psec.setAttribute('data-admin-panel', 'pending');
+    }
+    var userList = document.getElementById('admin-user-list');
+    if (userList) {
+      var usec = userList.closest('.admin-section') || userList.parentElement;
+      if (usec) usec.setAttribute('data-admin-panel', 'users');
+    }
+
+    tabs.addEventListener('click', function(e){
+      var t = e.target.closest('.admin-tab');
+      if (!t) return;
+      switchAdminTab(t.getAttribute('data-atab'));
+    });
+  }
+
+  window.switchAdminTab = function(tab){
+    document.querySelectorAll('.admin-tab').forEach(function(t){
+      t.classList.toggle('active', t.getAttribute('data-atab')===tab);
+    });
+    var body = document.getElementById('admin-body-content');
+    if (!body) return;
+
+    // Show/hide by data-admin-panel; fallback show all god-related for god tab
+    var sections = body.children;
+    for (var i=0;i<sections.length;i++){
+      var sec = sections[i];
+      var panel = sec.getAttribute('data-admin-panel');
+      if (!panel) {
+        // heuristic
+        var id = sec.id || '';
+        var text = (sec.textContent||'').slice(0,80);
+        if (id.indexOf('god')>=0 || id.indexOf('monitor')>=0 || text.indexOf('上帝')>=0 || text.indexOf('Live Dashboard')>=0)
+          panel = 'god';
+        else if (id.indexOf('gate')>=0 || text.indexOf('清道夫')>=0 || text.indexOf('遊客')>=0)
+          panel = 'gate';
+        else if (text.indexOf('用戶')>=0 || sec.querySelector('#admin-user-list'))
+          panel = 'users';
+        else if (text.indexOf('待審')>=0 || sec.querySelector('#admin-pending-list'))
+          panel = 'pending';
+        else if (text.indexOf('公告')>=0 || text.indexOf('推播')>=0)
+          panel = 'announce';
+        else
+          panel = 'god'; // default show in god
+        sec.setAttribute('data-admin-panel', panel);
+      }
+      sec.style.display = (panel === tab) ? '' : 'none';
+    }
+
+    if (tab === 'god' || tab === 'users') window.refreshAdminDashboard();
+    if (tab === 'announce' && typeof window.openBroadcastHub === 'function') {
+      // embed tip
+    }
+  };
+
+  // 搜尋用戶
+  document.addEventListener('input', function(e){
+    if (e.target && e.target.id === 'admin-user-search') renderAdminUserList();
+  });
+
+  console.log('✅ v25 管理員系統：僅 Lucas · 上帝視角已重接');
+})();
+</script>
+
+
+<style id="v26-admin-extra">
+#admin-panel-btn.lucas-visible {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+.admin-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.admin-tool-card {
+  padding: 14px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+  color: inherit;
+  font-family: inherit;
+}
+.admin-tool-card:hover {
+  border-color: rgba(220,38,38,0.45);
+  background: rgba(220,38,38,0.1);
+  transform: translateY(-2px);
+}
+.admin-tool-card .at-icon { font-size: 1.4rem; display: block; margin-bottom: 6px; }
+.admin-tool-card .at-name { font-weight: 800; font-size: 0.85rem; display: block; }
+.admin-tool-card .at-desc { font-size: 0.7rem; color: var(--text3); margin-top: 2px; display: block; }
+.admin-log-box {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(0,0,0,0.2);
+  font-size: 0.78rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+</style>
+
+<script>
+/* v26：管理員按鈕強制顯示（僅 Lucas）+ 管理員面板 12 項新工具 */
+(function(){
+  'use strict';
+
+  function toast(msg, type){
+    if (typeof showToast === 'function') showToast(msg, type||'info');
+    else console.log(msg);
+  }
+  function esc(s){
+    if (typeof window.esc === 'function') return window.esc(s);
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function sk(uid){
+    if (typeof safeKey === 'function') return safeKey(uid);
+    return String(uid||'').replace(/[.#$\/\[\]]/g,'_');
+  }
+
+  // 取得目前暱稱（相容多種 profile 來源）
+  function getMyNick(){
+    try {
+      if (window.profile && profile.nick) return String(profile.nick).trim();
+    } catch(e){}
+    try {
+      if (typeof profile !== 'undefined' && profile && profile.nick) return String(profile.nick).trim();
+    } catch(e){}
+    try {
+      var el = document.getElementById('sb-name-el');
+      if (el && el.textContent) return el.textContent.trim();
+    } catch(e){}
+    try {
+      var pm = document.getElementById('pm-uname');
+      if (pm && pm.textContent) return pm.textContent.trim();
+    } catch(e){}
+    return '';
+  }
+
+  window.isAdminLike = function(){
+    return getMyNick() === 'Lucas';
+  };
+
+  function forceShowAdminBtn(){
+    var btn = document.getElementById('admin-panel-btn');
+    if (!btn) {
+      // 若按鈕被弄丟，重建在側邊欄
+      var footer = document.querySelector('.sb-footer');
+      if (!footer) return;
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = 'admin-panel-btn';
+      btn.className = 'auth-btn';
+      btn.textContent = '🛡️ 管理員面板';
+      btn.style.cssText = 'margin-top:4px;padding:11px;font-size:.8rem;font-weight:800;background:linear-gradient(135deg,#dc2626,#991b1b);border:1px solid rgba(255,100,100,0.4);color:#fff;border-radius:12px;width:100%;cursor:pointer;';
+      btn.onclick = function(){ if (window.openAdminPanel) window.openAdminPanel(); };
+      var logout = footer.querySelector('.logout-btn');
+      if (logout) footer.insertBefore(btn, logout);
+      else footer.appendChild(btn);
+    }
+    if (window.isAdminLike()) {
+      btn.style.display = 'block';
+      btn.style.visibility = 'visible';
+      btn.style.opacity = '1';
+      btn.classList.add('lucas-visible');
+    } else {
+      btn.style.display = 'none';
+      btn.classList.remove('lucas-visible');
+    }
+  }
+
+  // 高頻同步，避免被其他腳本蓋掉
+  setInterval(forceShowAdminBtn, 800);
+  setTimeout(forceShowAdminBtn, 300);
+  setTimeout(forceShowAdminBtn, 1500);
+  setTimeout(forceShowAdminBtn, 3000);
+
+  // ========== 管理員操作日誌 ==========
+  async function adminLog(action, detail){
+    try {
+      if (!db) return;
+      await db.ref('adminLogs').push({
+        by: 'Lucas',
+        action: action,
+        detail: detail || '',
+        ts: Date.now()
+      });
+    } catch(e){}
+  }
+
+  // ========== 12 個管理員工具 ==========
+  window.adminTools = {
+    // 1. 全服廣播（快捷）
+    broadcast: function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      if (typeof window.openBroadcastHub === 'function') window.openBroadcastHub();
+      else toast('推播中心不可用','warn');
+    },
+    // 2. 全服慢速模式
+    slowMode: async function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      var sec = prompt('全服慢速模式：幾秒才能發一則？（0=關閉）', '5');
+      if (sec === null) return;
+      sec = parseInt(sec, 10);
+      if (isNaN(sec) || sec < 0) return toast('無效數字','warn');
+      await db.ref('serverSettings/slowModeSeconds').set(sec);
+      await adminLog('slowMode', sec+'s');
+      toast(sec ? ('🐢 慢速模式：'+sec+' 秒') : '已關閉慢速模式', 'success');
+    },
+    // 3. 全服鎖定（僅管理員可發言）
+    lockServer: async function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      var snap = await db.ref('serverSettings/locked').once('value');
+      var locked = !snap.val();
+      await db.ref('serverSettings/locked').set(locked);
+      await adminLog('lockServer', locked ? 'on' : 'off');
+      toast(locked ? '🔒 全服已鎖定（僅 Lucas 可發言）' : '🔓 全服已解鎖', locked?'warn':'success');
+    },
+    // 4. 清空當前頻道訊息
+    clearChannel: async function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      var ch = (typeof currentChannel !== 'undefined' && currentChannel) ? currentChannel : 'main';
+      if (!confirm('⚠️ 確定清空頻道「'+ch+'」的所有訊息？此操作無法復原！')) return;
+      if (!confirm('最後確認：真的要刪除 '+ch+' 全部訊息？')) return;
+      await db.ref('msgs/'+ch).remove();
+      await adminLog('clearChannel', ch);
+      toast('🗑️ 頻道 '+ch+' 已清空','warn');
+      var box = document.getElementById('msg-container');
+      if (box) box.innerHTML = '';
+    },
+    // 5. 贈送積分給用戶
+    givePoints: async function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      var nick = prompt('要贈送積分的用戶暱稱：');
+      if (!nick) return;
+      var amount = parseInt(prompt('贈送多少積分？', '100'), 10);
+      if (!amount || amount === 0) return;
+      var snap = await db.ref('users').once('value');
+      var users = snap.val() || {};
+      var targetUid = null;
+      Object.keys(users).forEach(function(uid){
+        if ((users[uid].nick||'') === nick.trim()) targetUid = uid;
+      });
+      if (!targetUid) return toast('找不到用戶：'+nick,'error');
+      await db.ref('users/'+targetUid+'/points').transaction(function(v){ return (v||0)+amount; });
+      await adminLog('givePoints', nick+' +'+amount);
+      toast('💰 已給 '+nick+' '+amount+' 積分','success');
+    },
+    // 6. 設定用戶階級稱號
+    setTitle: async function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      var nick = prompt('用戶暱稱：');
+      if (!nick) return;
+      var title = prompt('自訂階級稱號（空白=清除）：', '');
+      if (title === null) return;
+      var snap = await db.ref('users').once('value');
+      var users = snap.val() || {};
+      var targetUid = null;
+      Object.keys(users).forEach(function(uid){
+        if ((users[uid].nick||'') === nick.trim()) targetUid = uid;
+      });
+      if (!targetUid) return toast('找不到用戶','error');
+      await db.ref('users/'+targetUid+'/customTitle').set(title.trim());
+      await adminLog('setTitle', nick+' → '+title);
+      toast('👑 已設定 '+nick+' 的稱號','success');
+    },
+    // 7. 查看管理日誌
+    viewLogs: async function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      var el = document.getElementById('admin-extra-log');
+      if (!el) return toast('請先開啟管理員面板的「工具箱」分頁','warn');
+      el.innerHTML = '載入中...';
+      var snap = await db.ref('adminLogs').limitToLast(50).once('value');
+      var data = snap.val() || {};
+      var list = Object.keys(data).map(function(k){ var v=data[k]; v._k=k; return v; })
+        .sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+      if (!list.length) { el.innerHTML = '尚無日誌'; return; }
+      el.innerHTML = list.map(function(l){
+        return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);">'
+          + '<span style="color:var(--gold2);">'+(l.ts?new Date(l.ts).toLocaleString('zh-TW'):'')+'</span> · '
+          + esc(l.action)+' · '+esc(l.detail||'')+'</div>';
+      }).join('');
+    },
+    // 8. 強制全員重新整理提示
+    forceReloadNotice: async function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      await db.ref('serverSettings/reloadNotice').set({ ts: Date.now(), by: 'Lucas', msg: '管理員要求重新整理頁面以套用更新' });
+      await adminLog('forceReloadNotice', '');
+      toast('📢 已發送全服重新整理通知','success');
+    },
+    // 9. 匯出用戶列表
+    exportUsers: async function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      var snap = await db.ref('users').once('value');
+      var users = snap.val() || {};
+      var rows = Object.keys(users).map(function(uid){
+        var u = users[uid]||{};
+        return { uid: uid, nick: u.nick, email: u.email, msgCount: u.msgCount||0, points: u.points||0, createdAt: u.createdAt };
+      });
+      var blob = new Blob([JSON.stringify(rows, null, 2)], {type:'application/json'});
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'empire-users-'+Date.now()+'.json';
+      a.click();
+      await adminLog('exportUsers', rows.length+' users');
+      toast('📥 已匯出 '+rows.length+' 位用戶','success');
+    },
+    // 10. 全體禁言（緊急）
+    muteAll: async function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      var on = confirm('開啟「緊急全體禁言」？\n（等同全服鎖定，僅 Lucas 可發言）\n按取消可關閉。');
+      // OK = lock, Cancel = unlock if they confirm unlock
+      if (on) {
+        await db.ref('serverSettings/locked').set(true);
+        await adminLog('muteAll', 'on');
+        toast('🚨 緊急全體禁言已開啟','warn');
+      } else {
+        if (confirm('要關閉全服鎖定嗎？')) {
+          await db.ref('serverSettings/locked').set(false);
+          await adminLog('muteAll', 'off');
+          toast('已關閉全體禁言','success');
+        }
+      }
+    },
+    // 11. 重置用戶積分
+    resetPoints: async function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      var nick = prompt('要重置積分的用戶暱稱：');
+      if (!nick) return;
+      if (!confirm('確定將 '+nick+' 的積分歸零？')) return;
+      var snap = await db.ref('users').once('value');
+      var users = snap.val() || {};
+      var targetUid = null;
+      Object.keys(users).forEach(function(uid){
+        if ((users[uid].nick||'') === nick.trim()) targetUid = uid;
+      });
+      if (!targetUid) return toast('找不到用戶','error');
+      await db.ref('users/'+targetUid+'/points').set(0);
+      await adminLog('resetPoints', nick);
+      toast('已重置 '+nick+' 積分','warn');
+    },
+    // 12. 系統公告（寫入 announce）
+    systemAnnounce: async function(){
+      if (!window.isAdminLike()) return toast('權限不足','error');
+      var msg = prompt('系統置頂公告內容：');
+      if (!msg || !msg.trim()) return;
+      await db.ref('announce').set({ text: msg.trim(), by: 'Lucas', ts: Date.now(), level: 'urgent' });
+      await adminLog('systemAnnounce', msg.trim().slice(0,40));
+      toast('📢 系統公告已發布','success');
+    }
+  };
+
+  // 在管理員面板注入「工具箱」分頁內容
+  function injectAdminToolbox(){
+    var body = document.getElementById('admin-body-content') || document.querySelector('#admin-panel-modal .modal-card');
+    if (!body) return;
+    if (document.getElementById('admin-toolbox-section')) return;
+
+    var sec = document.createElement('div');
+    sec.id = 'admin-toolbox-section';
+    sec.className = 'admin-section';
+    sec.setAttribute('data-admin-panel', 'tools');
+    sec.innerHTML =
+      '<div class="admin-section-title" style="color:#fca5a5;margin-bottom:12px;">🧰 管理員工具箱（12 項）</div>'
+      + '<div class="admin-tool-grid">'
+      + toolCard('broadcast','📢','重要推播','打開推播中心')
+      + toolCard('systemAnnounce','📣','系統置頂公告','寫入聊天室頂部')
+      + toolCard('slowMode','🐢','慢速模式','限制發言頻率')
+      + toolCard('lockServer','🔒','全服鎖定','僅 Lucas 可發言')
+      + toolCard('muteAll','🚨','緊急全體禁言','一鍵鎖服')
+      + toolCard('clearChannel','🗑️','清空當前頻道','刪除本頻道訊息')
+      + toolCard('givePoints','💰','贈送積分','指定用戶加分')
+      + toolCard('resetPoints','💸','重置積分','用戶積分歸零')
+      + toolCard('setTitle','👑','設定稱號','自訂階級名稱')
+      + toolCard('exportUsers','📥','匯出用戶','下載 JSON')
+      + toolCard('forceReloadNotice','🔄','全服重整通知','請用戶重新整理')
+      + toolCard('viewLogs','📋','管理日誌','查看操作紀錄')
+      + '</div>'
+      + '<div style="font-weight:700;margin:14px 0 8px;">📋 最近管理日誌</div>'
+      + '<div class="admin-log-box" id="admin-extra-log">開啟此分頁後點「管理日誌」載入</div>';
+
+    body.appendChild(sec);
+
+    // 加分頁按鈕
+    var tabs = document.querySelector('.admin-tabs');
+    if (tabs && !tabs.querySelector('[data-atab="tools"]')) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'admin-tab';
+      b.setAttribute('data-atab', 'tools');
+      b.textContent = '🧰 工具箱';
+      tabs.appendChild(b);
+    }
+
+    sec.querySelectorAll('.admin-tool-card').forEach(function(card){
+      card.addEventListener('click', function(){
+        var act = card.getAttribute('data-tool');
+        if (window.adminTools && typeof window.adminTools[act] === 'function') {
+          window.adminTools[act]();
+        }
+      });
+    });
+  }
+
+  function toolCard(id, icon, name, desc){
+    return '<button type="button" class="admin-tool-card" data-tool="'+id+'">'
+      + '<span class="at-icon">'+icon+'</span>'
+      + '<span class="at-name">'+name+'</span>'
+      + '<span class="at-desc">'+desc+'</span></button>';
+  }
+
+  // 攔截 openAdminPanel：顯示按鈕 + 注入工具箱
+  var _origOpen = window.openAdminPanel;
+  window.openAdminPanel = function(){
+    if (!window.isAdminLike()) {
+      toast('🚫 僅皇帝 Lucas 可使用管理員面板','error');
+      forceShowAdminBtn();
+      return;
+    }
+    forceShowAdminBtn();
+    if (typeof _origOpen === 'function') {
+      try { _origOpen(); } catch(e){ console.error(e); }
+    } else {
+      var m = document.getElementById('admin-panel-modal');
+      if (m) m.classList.add('open');
+    }
+    setTimeout(function(){
+      injectAdminToolbox();
+      if (typeof window.refreshAdminDashboard === 'function') window.refreshAdminDashboard();
+    }, 200);
+  };
+
+  // 監聽 serverSettings 鎖定/慢速（對所有用戶生效）
+  function listenServerSettings(){
+    if (typeof db === 'undefined' || !db) return;
+    db.ref('serverSettings').on('value', function(snap){
+      window.__serverSettings = snap.val() || {};
+    });
+  }
+
+  // hook sendMsg 檢查鎖定與慢速
+  var sendHookTries = 0;
+  var sendHookTimer = setInterval(function(){
+    sendHookTries++;
+    if (typeof window.sendMsg === 'function' && !window.sendMsg._v26Hooked) {
+      clearInterval(sendHookTimer);
+      var orig = window.sendMsg;
+      window.sendMsg = function(){
+        var ss = window.__serverSettings || {};
+        if (ss.locked && !window.isAdminLike()) {
+          toast('🔒 全服已鎖定，僅管理員可發言','error');
+          return;
+        }
+        if (ss.slowModeSeconds && ss.slowModeSeconds > 0 && !window.isAdminLike()) {
+          var now = Date.now();
+          if (window.__lastMsgAt && (now - window.__lastMsgAt) < ss.slowModeSeconds * 1000) {
+            toast('🐢 慢速模式：請等待 '+ss.slowModeSeconds+' 秒','warn');
+            return;
+          }
+          window.__lastMsgAt = now;
+        }
+        return orig.apply(this, arguments);
+      };
+      window.sendMsg._v26Hooked = true;
+    }
+    if (sendHookTries > 40) clearInterval(sendHookTimer);
+  }, 500);
+
+  setTimeout(listenServerSettings, 2000);
+
+  // 全服重整通知
+  setTimeout(function(){
+    if (typeof db === 'undefined' || !db) return;
+    var first = true;
+    db.ref('serverSettings/reloadNotice').on('value', function(snap){
+      var v = snap.val();
+      if (first) { first = false; return; }
+      if (v && v.msg) {
+        toast('🔄 '+v.msg, 'warn');
+        if (confirm(v.msg + '\n\n是否立刻重新整理？')) location.reload();
+      }
+    });
+  }, 2500);
+
+  console.log('✅ v26 管理員按鈕修復 + 12 項管理工具');
+})();
+</script>
+
+
+<style id="v27-user-mgmt">
+.um-search-row {
+  display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center;
+}
+.um-search-row input {
+  flex: 1; min-width: 140px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg2); color: var(--text);
+  font-family: inherit;
+}
+.um-user-card {
+  border: 1px solid var(--border); border-radius: 14px; padding: 14px;
+  margin-bottom: 10px; background: rgba(255,255,255,0.03);
+}
+.um-user-card .um-head {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 10px;
+}
+.um-av {
+  width: 42px; height: 42px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--purple), #4f46e5);
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 900; flex-shrink: 0;
+}
+.um-actions {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.um-actions button {
+  padding: 5px 10px; border-radius: 8px; font-size: 0.72rem; font-weight: 700;
+  cursor: pointer; border: 1px solid var(--border); background: rgba(255,255,255,0.05);
+  color: var(--text); font-family: inherit;
+}
+.um-actions button:hover { filter: brightness(1.15); }
+.um-actions .danger { border-color: rgba(239,68,68,0.45); color: #fca5a5; background: rgba(239,68,68,0.1); }
+.um-actions .warn { border-color: rgba(245,158,11,0.45); color: #fcd34d; background: rgba(245,158,11,0.1); }
+.um-actions .ok { border-color: rgba(34,197,94,0.45); color: #86efac; background: rgba(34,197,94,0.1); }
+.um-actions .info { border-color: rgba(139,92,246,0.45); color: #c4b5fd; background: rgba(139,92,246,0.1); }
+.um-meta { font-size: 0.72rem; color: var(--text3); line-height: 1.5; }
+</style>
+
+<script>
+/* ============================================================
+   v27 用戶管理加強 — 20 項管理他人的功能
+   ============================================================ */
+(function(){
+  'use strict';
+
+  function toast(msg, type){
+    if (typeof showToast === 'function') showToast(msg, type||'info');
+    else console.log(msg);
+  }
+  function esc(s){
+    if (typeof window.esc === 'function') return window.esc(s);
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function sk(uid){
+    if (typeof safeKey === 'function') return safeKey(uid);
+    return String(uid||'').replace(/[.#$\/\[\]]/g,'_');
+  }
+  function isLucas(){
+    if (typeof window.isAdminLike === 'function') return window.isAdminLike();
+    try { return !!(window.profile && profile.nick === 'Lucas'); } catch(e){ return false; }
+  }
+  function requireLucas(){
+    if (!isLucas()) { toast('🚫 僅 Lucas 可使用','error'); return false; }
+    return true;
+  }
+  async function adminLog(action, detail){
+    try {
+      if (db) await db.ref('adminLogs').push({ by:'Lucas', action:action, detail:detail||'', ts:Date.now() });
+    } catch(e){}
+  }
+
+  async function findUserByNick(nick){
+    nick = (nick||'').trim();
+    if (!nick) return null;
+    var snap = await db.ref('users').once('value');
+    var users = snap.val() || {};
+    var found = null;
+    Object.keys(users).forEach(function(uid){
+      if ((users[uid].nick||'') === nick) found = { uid: uid, user: users[uid] };
+    });
+    return found;
+  }
+
+  // -------------------- 20 項用戶管理功能 --------------------
+  window.userMgmt = {
+    // 1. 更改稱號
+    setTitle: async function(uid, nick){
+      if (!requireLucas()) return;
+      var title = prompt('為「'+nick+'」設定階級稱號（空白=清除）：', '');
+      if (title === null) return;
+      await db.ref('users/'+uid+'/customTitle').set((title||'').trim());
+      await db.ref('presence').once('value').then(function(s){
+        var p = s.val()||{};
+        Object.keys(p).forEach(function(k){
+          if (p[k] && p[k].uid === uid) db.ref('presence/'+k+'/customTitle').set((title||'').trim());
+        });
+      });
+      await adminLog('setTitle', nick+' → '+title);
+      toast('👑 已更新 '+nick+' 的稱號','success');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 2. 更改暱稱
+    setNick: async function(uid, nick){
+      if (!requireLucas()) return;
+      var neu = prompt('將「'+nick+'」的暱稱改為：', nick);
+      if (!neu || !neu.trim()) return;
+      neu = neu.trim().substring(0, 20);
+      await db.ref('users/'+uid+'/nick').set(neu);
+      await adminLog('setNick', nick+' → '+neu);
+      toast('已將暱稱改為 '+neu,'success');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 3. 設定積分
+    setPoints: async function(uid, nick){
+      if (!requireLucas()) return;
+      var n = prompt('設定「'+nick+'」的積分為：', '0');
+      if (n === null) return;
+      n = parseInt(n, 10);
+      if (isNaN(n) || n < 0) return toast('無效數字','warn');
+      await db.ref('users/'+uid+'/points').set(n);
+      await adminLog('setPoints', nick+' = '+n);
+      toast('💰 '+nick+' 積分已設為 '+n,'success');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 4. 增加積分
+    addPoints: async function(uid, nick){
+      if (!requireLucas()) return;
+      var n = prompt('給「'+nick+'」增加多少積分？（可負數）', '100');
+      if (n === null) return;
+      n = parseInt(n, 10);
+      if (isNaN(n)) return toast('無效數字','warn');
+      await db.ref('users/'+uid+'/points').transaction(function(v){ return (v||0)+n; });
+      await adminLog('addPoints', nick+' +'+n);
+      toast('💰 已調整 '+nick+' 積分','success');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 5. 設定訊息數
+    setMsgCount: async function(uid, nick){
+      if (!requireLucas()) return;
+      var n = prompt('設定「'+nick+'」的訊息數：', '0');
+      if (n === null) return;
+      n = parseInt(n, 10);
+      if (isNaN(n) || n < 0) return toast('無效','warn');
+      await db.ref('users/'+uid+'/msgCount').set(n);
+      await adminLog('setMsgCount', nick+' = '+n);
+      toast('已設定訊息數','success');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 6. 禁言
+    mute: async function(uid, nick){
+      if (!requireLucas()) return;
+      await db.ref('mutes/'+sk(uid)).set(true);
+      await adminLog('mute', nick);
+      toast('🔇 已禁言 '+nick,'warn');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 7. 解除禁言
+    unmute: async function(uid, nick){
+      if (!requireLucas()) return;
+      await db.ref('mutes/'+sk(uid)).remove();
+      await adminLog('unmute', nick);
+      toast('✅ 已解除禁言 '+nick,'success');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 8. 封鎖
+    ban: async function(uid, nick){
+      if (!requireLucas()) return;
+      if (!confirm('確定封鎖 '+nick+'？')) return;
+      await db.ref('blacklist/'+sk(uid)).set(true);
+      await adminLog('ban', nick);
+      toast('🚫 已封鎖 '+nick,'warn');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 9. 解封
+    unban: async function(uid, nick){
+      if (!requireLucas()) return;
+      await db.ref('blacklist/'+sk(uid)).remove();
+      await adminLog('unban', nick);
+      toast('✅ 已解封 '+nick,'success');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 10. 踢出下線
+    kick: async function(uid, nick){
+      if (!requireLucas()) return;
+      if (!confirm('踢出 '+nick+'？')) return;
+      await db.ref('adminCommands/'+sk(uid)).push({ cmd:'kick', from:'Lucas', ts:Date.now() });
+      var pres = await db.ref('presence').once('value');
+      var p = pres.val()||{};
+      Object.keys(p).forEach(function(k){
+        if (p[k] && p[k].uid === uid) db.ref('presence/'+k).remove();
+      });
+      await adminLog('kick', nick);
+      toast('⛔ 已踢出 '+nick,'warn');
+    },
+
+    // 11. 發送警告
+    warn: async function(uid, nick){
+      if (!requireLucas()) return;
+      var msg = prompt('警告內容（會通知 '+nick+'）：');
+      if (!msg) return;
+      await db.ref('adminWarnings/'+sk(uid)).push({ msg: msg, from:'Lucas', ts:Date.now() });
+      await adminLog('warn', nick+': '+msg.slice(0,30));
+      toast('⚠️ 已向 '+nick+' 發送警告','success');
+    },
+
+    // 12. 發送私訊（管理員名義）
+    adminDm: async function(uid, nick){
+      if (!requireLucas()) return;
+      var msg = prompt('以管理員身分私訊 '+nick+'：');
+      if (!msg || !msg.trim()) return;
+      if (typeof openDmWindow === 'function' && currentUser) {
+        openDmWindow(uid, nick, '');
+        setTimeout(function(){
+          var input = document.getElementById('dm-input');
+          if (input) { input.value = '【管理員訊息】'+msg.trim(); }
+        }, 400);
+      } else {
+        // 直接寫入 DM
+        var a = sk(currentUser.uid), b = sk(uid);
+        var key = a < b ? a+'_'+b : b+'_'+a;
+        await db.ref('dms/'+key).push({
+          uid: currentUser.uid, nick: 'Lucas', text: '【管理員訊息】'+msg.trim(),
+          time: new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}),
+          ts: Date.now()
+        });
+        toast('私訊已送出','success');
+      }
+      await adminLog('adminDm', nick);
+    },
+
+    // 13. 設定 VIP
+    setVip: async function(uid, nick){
+      if (!requireLucas()) return;
+      var days = prompt('給予 VIP 天數（0=取消 VIP）：', '30');
+      if (days === null) return;
+      days = parseInt(days, 10);
+      if (isNaN(days) || days < 0) return toast('無效','warn');
+      var exp = days > 0 ? Date.now() + days*86400000 : null;
+      await db.ref('users/'+uid).update({ vip: days>0, vipExpires: exp });
+      await adminLog('setVip', nick+' '+days+'d');
+      toast(days ? ('⭐ '+nick+' VIP '+days+' 天') : (nick+' VIP 已取消'), 'success');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 14. 設定角色
+    setRole: async function(uid, nick){
+      if (!requireLucas()) return;
+      var role = prompt('角色：civilian / vip / moderator\n（不可設 admin）', 'civilian');
+      if (!role) return;
+      role = role.trim().toLowerCase();
+      if (role === 'admin') return toast('不可透過此處設定 admin','warn');
+      if (['civilian','vip','moderator'].indexOf(role) < 0) return toast('無效角色','warn');
+      await db.ref('users/'+uid+'/role').set(role);
+      await db.ref('roles/'+sk(uid)).set(role);
+      await adminLog('setRole', nick+' → '+role);
+      toast('已設定角色：'+role,'success');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 15. 重置狀態訊息
+    clearStatus: async function(uid, nick){
+      if (!requireLucas()) return;
+      await db.ref('users/'+uid).update({ statusMsg:'', statusExpiresAt:null });
+      await adminLog('clearStatus', nick);
+      toast('已清除 '+nick+' 的狀態','success');
+    },
+
+    // 16. 查看用戶詳細資料
+    viewDetail: async function(uid, nick){
+      if (!requireLucas()) return;
+      var snap = await db.ref('users/'+uid).once('value');
+      var u = snap.val() || {};
+      var mute = await db.ref('mutes/'+sk(uid)).once('value');
+      var ban = await db.ref('blacklist/'+sk(uid)).once('value');
+      var info = [
+        '暱稱: '+(u.nick||''),
+        'Email: '+(u.email||'—'),
+        'UID: '+uid,
+        '訊息數: '+(u.msgCount||0),
+        '積分: '+(u.points||0),
+        '稱號: '+(u.customTitle||'—'),
+        '角色: '+(u.role||'civilian'),
+        'VIP: '+(u.vip ? '是' : '否'),
+        '禁言: '+(mute.val()?'是':'否'),
+        '封鎖: '+(ban.val()?'是':'否'),
+        '建立: '+(u.createdAt ? new Date(u.createdAt).toLocaleString('zh-TW') : '—'),
+        '狀態: '+(u.statusMsg||'—')
+      ].join('\n');
+      alert('📋 '+nick+' 詳細資料\n\n'+info);
+    },
+
+    // 17. 刪除該用戶全部好友關係
+    clearFriends: async function(uid, nick){
+      if (!requireLucas()) return;
+      if (!confirm('清除 '+nick+' 的所有好友關係？')) return;
+      await db.ref('friends/'+sk(uid)).remove();
+      // 也從對方列表移除（掃描）
+      var all = await db.ref('friends').once('value');
+      var f = all.val()||{};
+      var ops = [];
+      Object.keys(f).forEach(function(owner){
+        if (f[owner] && f[owner][sk(uid)]) ops.push(db.ref('friends/'+owner+'/'+sk(uid)).remove());
+      });
+      await Promise.all(ops);
+      await adminLog('clearFriends', nick);
+      toast('已清除好友關係','warn');
+    },
+
+    // 18. 強制改頭像（清除自訂頭像）
+    resetAvatar: async function(uid, nick){
+      if (!requireLucas()) return;
+      if (!confirm('重置 '+nick+' 的頭像？')) return;
+      await db.ref('users/'+uid+'/avatarUrl').set('');
+      await db.ref('users/'+uid+'/avatarFrame').set('none');
+      await adminLog('resetAvatar', nick);
+      toast('頭像已重置','success');
+    },
+
+    // 19. 暫時停權（N 小時內無法發言）
+    tempMute: async function(uid, nick){
+      if (!requireLucas()) return;
+      var hours = prompt('暫時禁言幾小時？', '1');
+      if (hours === null) return;
+      hours = parseFloat(hours);
+      if (isNaN(hours) || hours <= 0) return toast('無效','warn');
+      var until = Date.now() + hours * 3600000;
+      await db.ref('mutes/'+sk(uid)).set(true);
+      await db.ref('tempMutes/'+sk(uid)).set({ until: until, by:'Lucas', nick: nick });
+      await adminLog('tempMute', nick+' '+hours+'h');
+      toast('🔇 '+nick+' 禁言 '+hours+' 小時','warn');
+      // 到期自動解除（簡易：寫入後由客戶端或下次管理操作處理）
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    },
+
+    // 20. 完整刪除帳號資料
+    deleteAccount: async function(uid, nick){
+      if (!requireLucas()) return;
+      if (nick === 'Lucas') return toast('不能刪除自己','error');
+      if (!confirm('⚠️ 永久刪除「'+nick+'」的帳號資料？\n此操作強烈不建議，且難以復原。')) return;
+      if (!confirm('最後確認：刪除 '+nick+'？')) return;
+      var s = sk(uid);
+      await Promise.all([
+        db.ref('users/'+uid).remove(),
+        db.ref('blacklist/'+s).set(true),
+        db.ref('mutes/'+s).remove(),
+        db.ref('roles/'+s).remove(),
+        db.ref('friends/'+s).remove(),
+        db.ref('friendRequests/'+s).remove(),
+        db.ref('adminCommands/'+s).push({ cmd:'delete', from:'Lucas', ts:Date.now() })
+      ]);
+      await adminLog('deleteAccount', nick);
+      toast('🗑️ 已刪除 '+nick+' 資料','warn');
+      window.refreshUserMgmtList && window.refreshUserMgmtList();
+    }
+  };
+
+  // -------------------- 用戶管理 UI --------------------
+  window.refreshUserMgmtList = async function(){
+    var list = document.getElementById('um-list');
+    if (!list || !db) return;
+    var q = ((document.getElementById('um-search')||{}).value||'').trim().toLowerCase();
+    list.innerHTML = '<div style="text-align:center;padding:16px;color:var(--text3);">載入中...</div>';
+
+    try {
+      var results = await Promise.all([
+        db.ref('users').once('value'),
+        db.ref('mutes').once('value'),
+        db.ref('blacklist').once('value'),
+        db.ref('presence').once('value')
+      ]);
+      var users = results[0].val() || {};
+      var mutes = results[1].val() || {};
+      var bans = results[2].val() || {};
+      var presence = results[3].val() || {};
+      var onlineUids = {};
+      Object.keys(presence).forEach(function(k){
+        if (presence[k] && presence[k].uid) onlineUids[presence[k].uid] = presence[k];
+      });
+
+      var html = '';
+      Object.keys(users).forEach(function(uid){
+        var u = users[uid] || {};
+        var nick = u.nick || '?';
+        if (q && (nick + (u.email||'') + uid).toLowerCase().indexOf(q) < 0) return;
+        var isMuted = !!mutes[sk(uid)];
+        var isBanned = !!bans[sk(uid)];
+        var online = !!onlineUids[uid];
+        var letter = nick.charAt(0).toUpperCase();
+
+        html += '<div class="um-user-card">'
+          + '<div class="um-head">'
+          + '<div class="um-av">'+letter+'</div>'
+          + '<div style="flex:1;min-width:0;">'
+          + '<div style="font-weight:800;">'+esc(nick)
+          + (u.customTitle ? ' <span style="color:var(--gold2);font-size:0.75rem;">· '+esc(u.customTitle)+'</span>' : '')
+          + (u.vip ? ' <span style="color:#f59e0b;font-size:0.7rem;">VIP</span>' : '')
+          + '</div>'
+          + '<div class="um-meta">'
+          + (online?'🟢 在線':'⚫ 離線')
+          + ' · '+(u.msgCount||0)+' 則 · '+(u.points||0)+' 分'
+          + (isMuted?' · <span style="color:#f59e0b;">禁言中</span>':'')
+          + (isBanned?' · <span style="color:#ef4444;">已封鎖</span>':'')
+          + '<br>'+esc(u.email||'無 Email')+' · '+(u.role||'civilian')
+          + '</div></div></div>'
+          + '<div class="um-actions">'
+          + '<button class="info" onclick="userMgmt.setTitle(\''+uid+'\',\''+esc(nick)+'\')">👑 稱號</button>'
+          + '<button class="info" onclick="userMgmt.setNick(\''+uid+'\',\''+esc(nick)+'\')">✏️ 改名</button>'
+          + '<button class="ok" onclick="userMgmt.setPoints(\''+uid+'\',\''+esc(nick)+'\')">💰 設積分</button>'
+          + '<button class="ok" onclick="userMgmt.addPoints(\''+uid+'\',\''+esc(nick)+'\')">➕ 加積分</button>'
+          + '<button class="info" onclick="userMgmt.setMsgCount(\''+uid+'\',\''+esc(nick)+'\')">💬 訊息數</button>'
+          + (isMuted
+              ? '<button class="ok" onclick="userMgmt.unmute(\''+uid+'\',\''+esc(nick)+'\')">🔊 解禁</button>'
+              : '<button class="warn" onclick="userMgmt.mute(\''+uid+'\',\''+esc(nick)+'\')">🔇 禁言</button>')
+          + '<button class="warn" onclick="userMgmt.tempMute(\''+uid+'\',\''+esc(nick)+'\')">⏱️ 限時禁言</button>'
+          + (isBanned
+              ? '<button class="ok" onclick="userMgmt.unban(\''+uid+'\',\''+esc(nick)+'\')">✅ 解封</button>'
+              : '<button class="danger" onclick="userMgmt.ban(\''+uid+'\',\''+esc(nick)+'\')">🚫 封鎖</button>')
+          + '<button class="warn" onclick="userMgmt.kick(\''+uid+'\',\''+esc(nick)+'\')">⛔ 踢出</button>'
+          + '<button class="warn" onclick="userMgmt.warn(\''+uid+'\',\''+esc(nick)+'\')">⚠️ 警告</button>'
+          + '<button class="info" onclick="userMgmt.adminDm(\''+uid+'\',\''+esc(nick)+'\')">💌 私訊</button>'
+          + '<button class="info" onclick="userMgmt.setVip(\''+uid+'\',\''+esc(nick)+'\')">⭐ VIP</button>'
+          + '<button class="info" onclick="userMgmt.setRole(\''+uid+'\',\''+esc(nick)+'\')">🎭 角色</button>'
+          + '<button class="info" onclick="userMgmt.clearStatus(\''+uid+'\',\''+esc(nick)+'\')">💬 清狀態</button>'
+          + '<button class="info" onclick="userMgmt.viewDetail(\''+uid+'\',\''+esc(nick)+'\')">📋 詳情</button>'
+          + '<button class="warn" onclick="userMgmt.clearFriends(\''+uid+'\',\''+esc(nick)+'\')">👥 清好友</button>'
+          + '<button class="warn" onclick="userMgmt.resetAvatar(\''+uid+'\',\''+esc(nick)+'\')">🖼️ 重置頭像</button>'
+          + '<button class="danger" onclick="userMgmt.deleteAccount(\''+uid+'\',\''+esc(nick)+'\')">🗑️ 刪帳號</button>'
+          + '</div></div>';
+      });
+
+      list.innerHTML = html || '<div style="text-align:center;padding:24px;color:var(--text3);">找不到用戶</div>';
+    } catch(e) {
+      console.error(e);
+      list.innerHTML = '<div style="padding:16px;color:#ef4444;">載入失敗</div>';
+    }
+  };
+
+  function injectUserMgmtPanel(){
+    var body = document.getElementById('admin-body-content') || document.querySelector('#admin-panel-modal .modal-card');
+    if (!body || document.getElementById('admin-usermgmt-section')) return;
+
+    var sec = document.createElement('div');
+    sec.id = 'admin-usermgmt-section';
+    sec.className = 'admin-section';
+    sec.setAttribute('data-admin-panel', 'usermgmt');
+    sec.innerHTML =
+      '<div class="admin-section-title" style="color:#fca5a5;margin-bottom:10px;">👤 用戶深度管理（20 項操作）</div>'
+      + '<p style="font-size:0.78rem;color:var(--text3);margin-bottom:12px;">搜尋用戶後，可直接更改稱號、積分、禁言、VIP、角色等。</p>'
+      + '<div class="um-search-row">'
+      + '<input id="um-search" type="text" placeholder="搜尋暱稱 / Email…" oninput="window.refreshUserMgmtList && window.refreshUserMgmtList()">'
+      + '<button type="button" class="adm-btn" onclick="window.refreshUserMgmtList && window.refreshUserMgmtList()" style="padding:10px 14px;">刷新</button>'
+      + '</div>'
+      + '<div id="um-list"></div>';
+
+    body.appendChild(sec);
+
+    var tabs = document.querySelector('.admin-tabs');
+    if (tabs && !tabs.querySelector('[data-atab="usermgmt"]')) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'admin-tab';
+      b.setAttribute('data-atab', 'usermgmt');
+      b.textContent = '👤 用戶管理+';
+      tabs.appendChild(b);
+      b.addEventListener('click', function(){
+        if (typeof window.switchAdminTab === 'function') window.switchAdminTab('usermgmt');
+        else {
+          document.querySelectorAll('#admin-body-content > *').forEach(function(el){
+            el.style.display = el.getAttribute('data-admin-panel') === 'usermgmt' ? '' : 'none';
+          });
+        }
+        window.refreshUserMgmtList();
+      });
+    }
+  }
+
+  // 掛到 openAdminPanel
+  var prevOpen = window.openAdminPanel;
+  window.openAdminPanel = function(){
+    if (typeof prevOpen === 'function') prevOpen();
+    else {
+      if (!isLucas()) return toast('僅 Lucas','error');
+      var m = document.getElementById('admin-panel-modal');
+      if (m) m.classList.add('open');
+    }
+    setTimeout(function(){
+      injectUserMgmtPanel();
+    }, 250);
+  };
+
+  // 臨時禁言到期清理（管理端偶爾跑）
+  setInterval(async function(){
+    if (!db || !isLucas()) return;
+    try {
+      var snap = await db.ref('tempMutes').once('value');
+      var data = snap.val() || {};
+      var now = Date.now();
+      Object.keys(data).forEach(function(k){
+        if (data[k] && data[k].until && data[k].until < now) {
+          db.ref('tempMutes/'+k).remove();
+          db.ref('mutes/'+k).remove();
+        }
+      });
+    } catch(e){}
+  }, 60000);
+
+  console.log('✅ v27 用戶管理 20 項功能已載入');
+})();
+</script>
 
 </body>
 </html>
